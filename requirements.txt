@@ -1,0 +1,20 @@
+PyGithub==2.2.0
+pymysql==1.1.0
+pandas==2.2.0
+numpy==1.26.0
+matplotlib==3.8.2
+seaborn==0.13.0
+plotly==5.18.0
+scikit-learn==1.3.2
+fpdf==1.7.2
+jinja2==3.1.2
+python-dotenv==1.0.0
+requests==2.31.0
+docker==6.1.3
+PyYAML>=6.0
+# 移除docker-compose 1.29.2，因为它与PyYAML 6.0不兼容
+# 可以考虑使用docker compose V2（通过docker CLI）
+reportlab==4.0.8
+Pillow==10.1.0
+urllib3==2.1.0
+gitpython==3.1.40
