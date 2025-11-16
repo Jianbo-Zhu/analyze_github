@@ -75,6 +75,7 @@ class GitHubAPI:
             for repo in search_results:
                 # 检查速率限制
                 self.check_rate_limit()
+                logger.info(f"开始处理： {repo.full_name}")
                 
                 # 过滤项目（根据PRD要求）
                 if self._is_valid_project(repo):
@@ -104,19 +105,7 @@ class GitHubAPI:
         if repo.stargazers_count < config.MIN_STARS or repo.forks_count < config.MIN_FORKS:
             return False
         
-        try:
-            # 检查2025年以来的提交次数
-            since_date = datetime.strptime(config.START_DATE, '%Y-%m-%dT%H:%M:%SZ')
-            # PyGithub的get_commits方法不支持per_page参数，移除该参数
-            commits = list(repo.get_commits(since=since_date))
-            
-            if len(commits) < config.MIN_COMMITS:
-                return False
-            
-        except Exception as e:
-            logger.error(f"检查项目 {repo.full_name} 提交数时出错: {e}")
-            return False
-        
+        # 不再检查提交次数，直接返回True
         return True
     
     def get_project_languages(self, repo):
@@ -182,28 +171,7 @@ class GitHubAPI:
             logger.error(f"获取贡献者 {username} 详细信息时出错: {e}")
             return None
     
-    def get_recent_commits(self, repo, since_date=None, per_page=100):
-        """获取项目最近的提交记录
-        
-        Args:
-            repo: GitHub仓库对象
-            since_date: 开始日期
-            per_page: 每页结果数量
-            
-        Returns:
-            list: 提交记录列表
-        """
-        try:
-            self.check_rate_limit()
-            if not since_date:
-                since_date = datetime.strptime(config.START_DATE, '%Y-%m-%dT%H:%M:%SZ')
-            
-            # PyGithub的get_commits方法不支持per_page参数，移除该参数
-            commits = list(repo.get_commits(since=since_date))
-            return commits
-        except Exception as e:
-            logger.error(f"获取项目 {repo.full_name} 提交记录时出错: {e}")
-            return []
+    # 注意：get_recent_commits方法已被移除，不再获取提交数据
     
     def get_project_topics(self, repo):
         """获取项目主题标签

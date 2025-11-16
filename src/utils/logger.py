@@ -28,7 +28,7 @@ class LoggerManager:
         from .config import config
         
         # 设置日志级别
-        log_level = getattr(logging, getattr(config, 'LOG_LEVEL', 'DEBUG'), logging.INFO)
+        log_level = getattr(logging, getattr(config, 'LOG_LEVEL', 'INFO'), logging.INFO)
         logger.setLevel(log_level)
         
         # 创建格式器

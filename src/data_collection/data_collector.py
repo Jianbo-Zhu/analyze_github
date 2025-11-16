@@ -36,7 +36,7 @@ class DataCollector:
     def collect_projects(self):
         """采集符合条件的GitHub项目"""
         logger.info(f"开始采集GitHub项目，最大项目数: {config.MAX_PROJECTS}")
-        logger.info(f"筛选条件: 星标数>={config.MIN_STARS}, Fork数>={config.MIN_FORKS}, 2025年以来提交数>={config.MIN_COMMITS}")
+        logger.info(f"筛选条件: 星标数>={config.MIN_STARS}, Fork数>={config.MIN_FORKS}")
         
         # 构建搜索查询
         query = f"pushed:>{config.START_DATE}"
@@ -58,9 +58,6 @@ class DataCollector:
                 
                 # 保存贡献者信息
                 self._save_contributors(repo)
-                
-                # 保存最近的提交记录
-                self._save_recent_commits(repo)
                 
                 logger.info(f"项目 {repo.full_name} 数据采集完成")
                 
@@ -202,7 +199,7 @@ class DataCollector:
             
             # 获取统计信息
             stats = {
-                'total_commits': len(self.github_api.get_recent_commits(repo)),
+                'total_commits': None,  # 不再获取提交数量
                 'total_issues': repo.open_issues_count,
                 'total_pulls': len(list(repo.get_pulls(state='all'))),
                 'contributors_count': repo.get_contributors().totalCount if repo.get_contributors() else 0,
@@ -212,22 +209,22 @@ class DataCollector:
                 'updated_month': repo.updated_at.strftime('%Y-%m') if repo.updated_at else None
             }
             
-            # 插入或更新统计数据
+            # 插入或更新统计数据（total_commits设置为NULL）
             query = """
             INSERT INTO statistics (
                 project_id, total_commits, total_issues, total_pulls, 
                 contributors_count, watchers_count, network_count, 
                 created_month, updated_month
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                total_commits = %s, total_issues = %s, total_pulls = %s,
+                total_issues = %s, total_pulls = %s,
                 contributors_count = %s, watchers_count = %s, network_count = %s,
                 created_month = %s, updated_month = %s
             """
             
             params = (
                 project_id,
-                stats['total_commits'],
+                # 不再使用total_commits，直接设置为NULL
                 stats['total_issues'],
                 stats['total_pulls'],
                 stats['contributors_count'],
@@ -236,7 +233,6 @@ class DataCollector:
                 stats['created_month'],
                 stats['updated_month'],
                 # 更新参数
-                stats['total_commits'],
                 stats['total_issues'],
                 stats['total_pulls'],
                 stats['contributors_count'],
@@ -333,53 +329,7 @@ class DataCollector:
         except Exception as e:
             logger.error(f"保存项目-贡献者关联时出错: {e}")
     
-    def _save_recent_commits(self, repo):
-        """保存项目最近的提交记录"""
-        try:
-            # 获取项目ID
-            query = "SELECT id FROM projects WHERE github_id = %s"
-            result = self.db_manager.execute_query(query, (repo.id,))
-            if not result:
-                return
-            
-            project_id = result[0]['id']
-            
-            # 获取最近的提交记录
-            commits = self.github_api.get_recent_commits(repo, per_page=100)
-            
-            for commit in commits:
-                # 插入提交记录
-                query = """
-                INSERT IGNORE INTO commits (
-                    project_id, contributor_id, sha, message, 
-                    created_at, author_name, author_email
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """
-                
-                # 尝试获取贡献者ID
-                contributor_id = None
-                if commit.author:
-                    author_query = "SELECT id FROM contributors WHERE username = %s"
-                    author_result = self.db_manager.execute_query(author_query, (commit.author.login,))
-                    if author_result:
-                        contributor_id = author_result[0]['id']
-                
-                params = (
-                    project_id,
-                    contributor_id,
-                    commit.sha,
-                    commit.commit.message,
-                    commit.commit.author.date,
-                    commit.commit.author.name,
-                    commit.commit.author.email
-                )
-                
-                self.db_manager.execute_query(query, params)
-            
-            logger.debug(f"保存项目 {repo.full_name} 提交记录成功")
-            
-        except Exception as e:
-            logger.error(f"保存项目 {repo.full_name} 提交记录时出错: {e}")
+    # 注意：_save_recent_commits方法已被移除，不再保存提交数据
 
 # 创建数据采集器实例
 data_collector = DataCollector()
