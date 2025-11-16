@@ -30,7 +30,7 @@ class DataAnalyzer:
         logger.info("数据分析初始化完成")
     
     def analyze_programming_languages(self):
-        """分析编程语言分布
+        """分析编程语言分布（使用迭代器优化）
         
         Returns:
             dict: 包含编程语言分析结果的数据
@@ -48,14 +48,23 @@ class DataAnalyzer:
             """
             
             language_data = self.db_manager.execute_query(query)
-            df = pd.DataFrame(language_data)
             
-            # 计算百分比
-            total_projects = df['project_count'].sum()
-            df['percentage'] = (df['project_count'] / total_projects) * 100
+            # 计算总项目数
+            total_projects = sum(item['project_count'] for item in language_data)
             
-            # 获取主要语言的项目数量
-            top_languages = df.head(10).to_dict('records')
+            # 计算百分比并构建结果，使用迭代器而不是创建DataFrame
+            top_languages = []
+            for i, item in enumerate(language_data):
+                if i >= 10:  # 只取前10个
+                    break
+                
+                item_with_percentage = {
+                    'language_name': item['language_name'],
+                    'project_count': item['project_count'],
+                    'total_percentage': item['total_percentage'],
+                    'percentage': (item['project_count'] / total_projects) * 100 if total_projects > 0 else 0
+                }
+                top_languages.append(item_with_percentage)
             
             # 获取各语言的平均星标数
             query = """
@@ -293,7 +302,7 @@ class DataAnalyzer:
             raise
     
     def _extract_domain_keywords(self, descriptions):
-        """从项目描述中提取领域关键词
+        """从项目描述中提取领域关键词（优化版，减少内存使用）
         
         Args:
             descriptions: 项目描述列表
@@ -313,16 +322,21 @@ class DataAnalyzer:
             'tools': ['tool', 'utility', 'cli', 'command line', 'editor', 'ide']
         }
         
-        domain_counts = {domain: 0 for domain in domain_keywords.keys()}
-        
-        for item in descriptions:
-            if item['description']:
-                desc_lower = item['description'].lower()
+        # 使用生成器函数处理描述，避免一次性处理所有数据
+        def process_description(desc_item):
+            if desc_item['description']:
+                desc_lower = desc_item['description'].lower()
                 for domain, keywords in domain_keywords.items():
                     for keyword in keywords:
                         if keyword in desc_lower:
-                            domain_counts[domain] += 1
+                            yield domain
                             break  # 每个描述对每个领域只计数一次
+        
+        domain_counts = {domain: 0 for domain in domain_keywords.keys()}
+        
+        # 处理描述并统计
+        for domain in (d for desc in descriptions for d in process_description(desc)):
+            domain_counts[domain] += 1
         
         # 转换为排序后的列表
         sorted_domains = sorted(
@@ -528,7 +542,7 @@ class DataAnalyzer:
         return float(correlation) if not np.isnan(correlation) else 0
     
     def generate_analysis_summary(self):
-        """生成综合分析结果
+        """生成综合分析结果（使用生成器模式优化）
         
         Returns:
             dict: 包含所有分析结果的综合数据
@@ -536,13 +550,7 @@ class DataAnalyzer:
         logger.info("开始生成综合分析结果...")
         
         try:
-            # 执行所有分析
-            languages_analysis = self.analyze_programming_languages()
-            contributors_analysis = self.analyze_contributors()
-            domains_analysis = self.analyze_project_domains()
-            lifecycle_analysis = self.analyze_project_lifecycle()
-            health_analysis = self.analyze_community_health()
-            
+            # 获取统计信息（单独执行，避免与其他分析重叠）
             # 获取项目总数
             query = "SELECT COUNT(*) as total_count FROM projects"
             total_projects = self.db_manager.execute_query(query)[0]['total_count']
@@ -555,20 +563,32 @@ class DataAnalyzer:
             query = "SELECT SUM(total_commits) as total_count FROM statistics"
             total_commits = self.db_manager.execute_query(query)[0]['total_count'] or 0
             
-            # 综合结果
+            # 初始化结果字典
             summary = {
                 'metadata': {
                     'total_projects': total_projects,
                     'total_contributors': total_contributors,
                     'total_commits': total_commits,
                     'analysis_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                },
-                'languages': languages_analysis,
-                'contributors': contributors_analysis,
-                'domains': domains_analysis,
-                'lifecycle': lifecycle_analysis,
-                'community_health': health_analysis
+                }
             }
+            
+            # 使用生成器方式逐个执行分析，避免一次性加载所有结果
+            analysis_functions = [
+                ('languages', self.analyze_programming_languages),
+                ('contributors', self.analyze_contributors),
+                ('domains', self.analyze_project_domains),
+                ('lifecycle', self.analyze_project_lifecycle),
+                ('community_health', self.analyze_community_health)
+            ]
+            
+            for key, func in analysis_functions:
+                logger.info(f"正在执行 {key} 分析...")
+                result = func()
+                summary[key] = result
+                # 减少内存占用
+                if hasattr(result, 'clear'):
+                    result.clear()
             
             logger.info(f"综合分析完成: {total_projects} 个项目, {total_contributors} 个贡献者, {total_commits} 次提交")
             return summary

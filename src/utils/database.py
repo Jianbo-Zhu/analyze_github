@@ -44,12 +44,41 @@ class DatabaseManager:
             logger.error(f"数据库操作失败: {e}")
             raise
     
-    def execute_query(self, query, params=None, cursor_type=pymysql.cursors.DictCursor):
-        """执行SQL查询"""
+    def execute_query(self, query, params=None, cursor_type=pymysql.cursors.DictCursor, fetch_all=True):
+        """执行SQL查询
+        
+        Args:
+            query: SQL查询语句
+            params: 查询参数
+            cursor_type: 游标类型
+            fetch_all: 是否一次性获取所有结果
+                      - True: 返回所有结果列表（默认行为，兼容性好）
+                      - False: 返回生成器，流式获取结果，节省内存
+                      - 'generator': 同False，返回生成器
+                      - 'yield': 同False，返回生成器
+        
+        Returns:
+            - 对于SELECT语句：当fetch_all=True时返回结果列表，否则返回生成器
+            - 对于其他语句：返回受影响的行数
+        """
         with self.get_cursor(cursor_type) as cursor:
             cursor.execute(query, params)
+            
+            # 处理SELECT查询
             if query.strip().upper().startswith('SELECT'):
-                return cursor.fetchall()
+                # 兼容旧代码，默认一次性获取所有结果
+                if fetch_all is True:
+                    return cursor.fetchall()
+                else:
+                    # 流式获取结果，返回生成器
+                    def result_generator():
+                        while True:
+                            row = cursor.fetchone()
+                            if row is None:
+                                break
+                            yield row
+                    return result_generator()
+            # 处理非SELECT语句
             else:
                 return cursor.rowcount
     

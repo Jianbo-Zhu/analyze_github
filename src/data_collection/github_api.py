@@ -125,24 +125,38 @@ class GitHubAPI:
             logger.error(f"获取项目 {repo.full_name} 语言信息时出错: {e}")
             return {}
     
-    def get_project_contributors(self, repo, per_page=100):
-        """获取项目贡献者
+    def get_project_contributors(self, repo, max_count=None):
+        """获取项目贡献者（使用生成器优化）
         
         Args:
             repo: GitHub仓库对象
-            per_page: 每页结果数量
+            max_count: 最大返回贡献者数量，None表示返回全部
             
-        Returns:
-            list: 贡献者列表
+        Yields:
+            Contributor: GitHub贡献者对象
         """
         try:
             self.check_rate_limit()
-            # PyGithub的get_contributors方法不支持per_page参数，移除该参数
-            contributors = list(repo.get_contributors())
-            return contributors
+            
+            # 获取贡献者生成器
+            contributors_generator = repo.get_contributors()
+            
+            count = 0
+            for contributor in contributors_generator:
+                yield contributor
+                count += 1
+                
+                # 每处理50个贡献者检查一次速率限制
+                if count % 50 == 0:
+                    self.check_rate_limit()
+                
+                # 如果达到最大数量限制，停止迭代
+                if max_count is not None and count >= max_count:
+                    break
+                    
         except Exception as e:
             logger.error(f"获取项目 {repo.full_name} 贡献者信息时出错: {e}")
-            return []
+            return
     
     def get_contributor_details(self, username):
         """获取贡献者详细信息

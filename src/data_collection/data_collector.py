@@ -90,6 +90,9 @@ class DataCollector:
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
+            # 获取贡献者总数而不加载所有贡献者
+            contributors_count = repo.get_contributors().totalCount if repo.get_contributors() else 0
+            
             params = (
                 repo.id,
                 repo.name,
@@ -104,7 +107,7 @@ class DataCollector:
                 repo.license.name if repo.license else None,
                 repo.homepage,
                 repo.default_branch,
-                repo.get_contributors().totalCount if repo.get_contributors() else 0,
+                contributors_count,
                 repo.language,
                 ','.join(self.github_api.get_project_topics(repo)),
                 int(repo.created_at.timestamp()) if repo.created_at else None,
@@ -186,6 +189,22 @@ class DataCollector:
         except Exception as e:
             logger.error(f"保存项目 {repo.full_name} 主题标签时出错: {e}")
     
+    def _count_pulls(self, repo):
+        """计算PR数量（使用迭代器而非一次性加载所有PR）"""
+        try:
+            pulls_generator = repo.get_pulls(state='all')
+            count = 0
+            # 只计数不保存整个列表
+            for _ in pulls_generator:
+                count += 1
+                # 每处理100个PR检查一次速率限制
+                if count % 100 == 0:
+                    self.github_api.check_rate_limit()
+            return count
+        except Exception as e:
+            logger.error(f"计算项目 {repo.full_name} PR数量时出错: {e}")
+            return 0
+    
     def _save_project_statistics(self, repo):
         """保存项目统计信息"""
         try:
@@ -201,7 +220,7 @@ class DataCollector:
             stats = {
                 'total_commits': None,  # 不再获取提交数量
                 'total_issues': repo.open_issues_count,
-                'total_pulls': len(list(repo.get_pulls(state='all'))),
+                'total_pulls': self._count_pulls(repo),  # 使用优化后的方法计算PR数量
                 'contributors_count': repo.get_contributors().totalCount if repo.get_contributors() else 0,
                 'watchers_count': repo.subscribers_count,
                 'network_count': repo.network_count,
@@ -259,10 +278,9 @@ class DataCollector:
             
             project_id = result[0]['id']
             
-            # 获取贡献者列表
-            contributors = self.github_api.get_project_contributors(repo, per_page=100)
-            
-            for contributor in contributors:
+            # 使用生成器获取贡献者，避免一次性加载所有贡献者
+            # 限制处理最多1000个贡献者，避免处理过多数据
+            for contributor in self.github_api.get_project_contributors(repo, max_count=1000):
                 # 保存贡献者信息
                 contributor_id = self._save_contributor(contributor)
                 

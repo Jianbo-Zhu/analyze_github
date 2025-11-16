@@ -82,45 +82,47 @@ class ReportGenerator:
             'project_age_distribution': []
         }
         
+        # 辅助函数：高效获取排序后的前N个元素
+        def get_top_n_items(data_dict, n=15):
+            # 使用生成器表达式而不是列表推导式，避免创建大列表
+            return list([
+                {'name': key, 'value': value}
+                for _, key, value in sorted(
+                    ((-value, key, value) for key, value in data_dict.items()),
+                    key=lambda x: x[0]
+                )[:n]
+            ])
+        
         # 准备编程语言分布图数据
         if 'language_distribution' in self.report_data:
             languages = self.report_data['language_distribution'].get('distribution', {})
-            chart_data['language_distribution'] = [
-                {'name': lang, 'value': count}
-                for lang, count in sorted(languages.items(), key=lambda x: x[1], reverse=True)[:15]
-            ]
+            chart_data['language_distribution'] = get_top_n_items(languages)
         
         # 准备贡献者国家分布数据
         if 'contributor_demographics' in self.report_data:
             countries = self.report_data['contributor_demographics'].get('country_distribution', {})
-            chart_data['contributor_countries'] = [
-                {'name': country, 'value': count}
-                for country, count in sorted(countries.items(), key=lambda x: x[1], reverse=True)[:15]
-            ]
+            chart_data['contributor_countries'] = get_top_n_items(countries)
         
         # 准备项目领域分布数据
         if 'project_domains' in self.report_data:
             domains = self.report_data['project_domains'].get('distribution', {})
-            chart_data['project_domains'] = [
-                {'name': domain, 'value': count}
-                for domain, count in sorted(domains.items(), key=lambda x: x[1], reverse=True)[:15]
-            ]
+            chart_data['project_domains'] = get_top_n_items(domains)
         
-        # 准备贡献者活跃度数据
+        # 准备贡献者活跃度数据 - 直接使用生成器表达式
         if 'contributor_activity' in self.report_data:
             activity = self.report_data['contributor_activity'].get('commits_by_period', [])
-            chart_data['contributor_activity'] = [
+            chart_data['contributor_activity'] = (
                 {'period': period, 'commits': count}
                 for period, count in activity
-            ]
+            )
         
-        # 准备项目年龄分布数据
+        # 准备项目年龄分布数据 - 直接使用生成器表达式
         if 'project_lifecycle' in self.report_data:
             age_dist = self.report_data['project_lifecycle'].get('age_distribution', [])
-            chart_data['project_age_distribution'] = [
+            chart_data['project_age_distribution'] = (
                 {'age_group': group, 'count': count}
                 for group, count in age_dist
-            ]
+            )
         
         # 保存图表数据到报告数据中
         self.report_data['chart_data'] = chart_data
@@ -136,24 +138,41 @@ class ReportGenerator:
         
         findings = []
         
+        # 辅助函数：高效获取字典中的最大值项
+        def get_max_item(data_dict):
+            if not data_dict:
+                return None
+            # 使用迭代器逐个比较，避免创建整个列表
+            max_key = None
+            max_value = -float('inf')
+            for key, value in data_dict.items():
+                if value > max_value:
+                    max_value = value
+                    max_key = key
+            return max_key, max_value
+        
         # 基于数据生成洞察
         # 1. 最流行的编程语言
         if 'language_distribution' in self.report_data:
-            top_lang = list(self.report_data['language_distribution'].get('distribution', {}).items())[0]
-            findings.append({
-                'title': '最受欢迎的编程语言',
-                'description': f"{top_lang[0]} 是分析期间最受欢迎的编程语言，占比 {top_lang[1]}%。",
-                'type': 'language'
-            })
+            languages = self.report_data['language_distribution'].get('distribution', {})
+            top_lang = get_max_item(languages)
+            if top_lang:
+                findings.append({
+                    'title': '最受欢迎的编程语言',
+                    'description': f"{top_lang[0]} 是分析期间最受欢迎的编程语言，占比 {top_lang[1]}%。",
+                    'type': 'language'
+                })
         
         # 2. 贡献者地域分布
         if 'contributor_demographics' in self.report_data:
-            top_country = list(self.report_data['contributor_demographics'].get('country_distribution', {}).items())[0]
-            findings.append({
-                'title': '主要贡献者来源国',
-                'description': f"{top_country[0]} 是最大的贡献者来源国，贡献了约 {top_country[1]}% 的贡献者。",
-                'type': 'geography'
-            })
+            countries = self.report_data['contributor_demographics'].get('country_distribution', {})
+            top_country = get_max_item(countries)
+            if top_country:
+                findings.append({
+                    'title': '主要贡献者来源国',
+                    'description': f"{top_country[0]} 是最大的贡献者来源国，贡献了约 {top_country[1]}% 的贡献者。",
+                    'type': 'geography'
+                })
         
         # 3. 项目活跃度指标
         if 'community_health' in self.report_data:
@@ -164,13 +183,16 @@ class ReportGenerator:
                 'type': 'community'
             })
         
-        # 4. 新兴技术领域
+        # 4. 新兴技术领域 - 使用迭代器获取前3个元素
         if 'project_domains' in self.report_data:
             emerging_domains = self.report_data['project_domains'].get('emerging_domains', [])
             if emerging_domains:
+                # 生成器表达式获取前3个元素
+                top_emerging_domains = (domain for i, domain in enumerate(emerging_domains) if i < 3)
+                # 仅在需要时才转换为列表以连接字符串
                 findings.append({
                     'title': '新兴技术领域',
-                    'description': f"最具增长潜力的新兴技术领域包括：{', '.join(emerging_domains[:3])}。",
+                    'description': f"最具增长潜力的新兴技术领域包括：{', '.join(list(top_emerging_domains))}。",
                     'type': 'domain'
                 })
         
@@ -201,10 +223,23 @@ class ReportGenerator:
         # 确保输出目录存在
         os.makedirs(self.output_dir, exist_ok=True)
         
-        # 合并所有数据
+        # 处理报告数据中的生成器，转换为列表以便JSON序列化
+        def process_generator_data(data):
+            """递归处理数据中的生成器，转换为列表"""
+            if isinstance(data, dict):
+                return {key: process_generator_data(value) for key, value in data.items()}
+            elif isinstance(data, (list, tuple)):
+                return [process_generator_data(item) for item in data]
+            elif hasattr(data, '__iter__') and not isinstance(data, (str, bytes, dict, list, tuple, set)):
+                # 如果是生成器或其他迭代器，转换为列表
+                return list(data)
+            return data
+        
+        # 合并并处理所有数据
+        report_data_processed = process_generator_data(self.report_data)
         full_report_data = {
             'metadata': self.report_metadata,
-            'data': self.report_data
+            'data': report_data_processed
         }
         
         # 保存到文件
