@@ -250,6 +250,42 @@ class GitHubAPI:
             logger.error(f"获取贡献者 {username} 详细信息时出错: {e}")
             return None
     
+    def get_repo(self, repo_id):
+        """根据GitHub仓库ID获取仓库对象
+        
+        Args:
+            repo_id: GitHub仓库ID
+            
+        Returns:
+            Repository: GitHub仓库对象
+        """
+        try:
+            self.check_rate_limit()
+            repo = self.github.get_repo(repo_id)
+            logger.info(f"成功获取仓库ID {repo_id} 的对象: {repo.full_name}")
+            return repo
+        except Exception as e:
+            logger.error(f"获取仓库ID {repo_id} 的对象时出错: {e}")
+            raise
+    
+    def get_repo_by_name(self, full_name):
+        """根据仓库全名获取仓库对象
+        
+        Args:
+            full_name: 仓库全名，格式为'owner/repo'
+            
+        Returns:
+            Repository: GitHub仓库对象
+        """
+        try:
+            self.check_rate_limit()
+            repo = self.github.get_repo(full_name)
+            logger.info(f"成功获取仓库 {full_name} 的对象")
+            return repo
+        except Exception as e:
+            logger.error(f"获取仓库 {full_name} 的对象时出错: {e}")
+            raise
+    
     def get_commits(self, repo, max_count=None, since_date=None):
         """获取项目的提交记录
         

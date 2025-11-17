@@ -1,6 +1,7 @@
 import os
 import time
 import logging
+import argparse
 from datetime import datetime
 from src.utils.config import config
 from src.utils.logger import error_logger, reporting_logger as logger
@@ -101,9 +102,14 @@ def cleanup():
     except Exception as e:
         error_logger.error(f"关闭数据库连接时发生错误: {e}")
 
-def main():
-    """主函数"""
+def main(mode='all'):
+    """主函数
+    
+    Args:
+        mode: 执行模式 - 'all'(默认)：完整执行；'collect'：只采集数据；'report'：只分析并生成报告
+    """
     error_logger.info("===== GitHub开源项目分析系统启动 =====")
+    error_logger.info(f"执行模式: {mode}")
     
     start_time = time.time()
     
@@ -111,14 +117,18 @@ def main():
         # 1. 设置环境
         setup_environment()
         
-        # 2. 采集数据
-        collect_data()
+        report_files = None
         
-        # 3. 分析数据
-        analysis_results = analyze_data()
+        if mode == 'all' or mode == 'collect':
+            # 2. 采集数据
+            collect_data()
         
-        # 4. 生成报告
-        report_files = generate_reports(analysis_results)
+        if mode == 'all' or mode == 'report':
+            # 3. 分析数据
+            analysis_results = analyze_data()
+            
+            # 4. 生成报告
+            report_files = generate_reports(analysis_results)
         
         # 5. 清理资源
         cleanup()
@@ -259,16 +269,33 @@ def run_demo_mode():
         cleanup()
         raise
 
+def parse_args():
+    """解析命令行参数"""
+    parser = argparse.ArgumentParser(description='GitHub开源项目分析系统')
+    parser.add_argument('--collect', '-c', action='store_true', help='只执行数据采集')
+    parser.add_argument('--report', '-r', action='store_true', help='只执行数据分析和报告生成')
+    parser.add_argument('--demo', '-d', action='store_true', help='运行演示模式')
+    return parser.parse_args()
+
 if __name__ == "__main__":
     try:
-        # 检查是否运行在演示模式
-        demo_mode = os.environ.get('DEMO_MODE', 'false').lower() == 'true'
+        # 解析命令行参数
+        args = parse_args()
         
-        if demo_mode:
+        # 优先检查是否运行演示模式
+        if args.demo or os.environ.get('DEMO_MODE', 'false').lower() == 'true':
             error_logger.info("运行演示模式")
             run_demo_mode()
         else:
-            main()
+            # 根据参数确定执行模式
+            if args.collect:
+                mode = 'collect'
+            elif args.report:
+                mode = 'report'
+            else:
+                mode = 'all'
+            
+            main(mode)
     except Exception as e:
         error_logger.critical(f"程序执行失败: {e}")
         exit(1)

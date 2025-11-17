@@ -20,7 +20,9 @@ CREATE TABLE IF NOT EXISTS projects (
     main_language VARCHAR(50),
     topics VARCHAR(1024),
     created_at_timestamp BIGINT,
-    updated_at_timestamp BIGINT
+    updated_at_timestamp BIGINT,
+    status VARCHAR(50) DEFAULT 'pending',  -- 采集状态：pending(待采集), collecting(采集ing), completed(完成), failed(失败)
+    last_error TEXT  -- 错误信息，失败时存储
 );
 
 -- 项目语言分布表
