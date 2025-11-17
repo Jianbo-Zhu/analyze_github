@@ -329,14 +329,12 @@ class GitHubAPI:
             
             self.check_rate_limit()
             
-            # 构建PR查询参数
+            # 构建PR查询参数（不使用since参数，因为Repository.get_pulls()不支持）
             query_params = {
                 'state': 'all',
                 'sort': 'updated',
                 'direction': 'desc'
             }
-            if since_date:
-                query_params['since'] = since_date
             
             # 获取PR生成器
             pulls_generator = repo.get_pulls(**query_params)
