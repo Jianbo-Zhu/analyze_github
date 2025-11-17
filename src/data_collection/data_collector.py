@@ -56,8 +56,11 @@ class DataCollector:
                 # 保存项目统计信息
                 self._save_project_statistics(repo)
                 
-                # 保存贡献者信息
-                self._save_contributors(repo)
+                # 保存贡献者信息，但允许失败继续
+                try:
+                    self._save_contributors(repo)
+                except Exception as e:
+                    logger.warning(f"保存项目 {repo.full_name} 贡献者信息时出错，继续处理其他数据: {e}")
                 
                 logger.info(f"项目 {repo.full_name} 数据采集完成")
                 
@@ -90,8 +93,8 @@ class DataCollector:
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
-            # 获取贡献者总数而不加载所有贡献者
-            contributors_count = repo.get_contributors().totalCount if repo.get_contributors() else 0
+            # 初始设置贡献者数量为0，将在_save_contributors方法中更新为2025年以来的贡献者数量
+            contributors_count = 0
             
             params = (
                 repo.id,
@@ -221,7 +224,7 @@ class DataCollector:
                 'total_commits': None,  # 不再获取提交数量
                 'total_issues': repo.open_issues_count,
                 'total_pulls': self._count_pulls(repo),  # 使用优化后的方法计算PR数量
-                'contributors_count': repo.get_contributors().totalCount if repo.get_contributors() else 0,
+                'contributors_count': 0,  # 避免再次触发API调用，使用默认值
                 'watchers_count': repo.subscribers_count,
                 'network_count': repo.network_count,
                 'created_month': repo.created_at.strftime('%Y-%m') if repo.created_at else None,
@@ -278,20 +281,43 @@ class DataCollector:
             
             project_id = result[0]['id']
             
+            # 设置起始日期为2025年1月1日
+            import datetime
+            since_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+            logger.info(f"开始获取项目 {repo.full_name} 的2025年以来的贡献者")
+            
             # 使用生成器获取贡献者，避免一次性加载所有贡献者
             # 限制处理最多1000个贡献者，避免处理过多数据
-            for contributor in self.github_api.get_project_contributors(repo, max_count=1000):
+            contributors_processed = 0
+            for contributor in self.github_api.get_project_contributors(repo, max_count=1000, since_date=since_date):
                 # 保存贡献者信息
                 contributor_id = self._save_contributor(contributor)
                 
                 if contributor_id:
                     # 保存项目-贡献者关联
                     self._save_project_contributor(project_id, contributor_id, contributor.contributions)
+                    
+                contributors_processed += 1
+                
+                # 每处理100个贡献者检查一次
+                if contributors_processed % 100 == 0:
+                    logger.debug(f"已处理项目 {repo.full_name} 的 {contributors_processed} 个贡献者")
             
-            logger.debug(f"保存项目 {repo.full_name} 贡献者信息成功")
+            logger.info(f"保存项目 {repo.full_name} 贡献者信息成功，共处理 {contributors_processed} 个2025年以来的贡献者")
+            
+            # 更新项目的贡献者数量
+            query = "UPDATE projects SET contributors_count = %s WHERE id = %s"
+            self.db_manager.execute_query(query, (contributors_processed, project_id))
             
         except Exception as e:
-            logger.error(f"保存项目 {repo.full_name} 贡献者信息时出错: {e}")
+            # 专门处理大型仓库的API限制错误
+            error_message = str(e)
+            if "contributor list is too large" in error_message or "403" in error_message:
+                logger.warning(f"GitHub API限制：无法获取项目 {repo.full_name} 的贡献者列表，这是因为仓库历史或贡献者列表过大")
+                # 在这里可以添加降级策略，比如只获取前N个贡献者
+            else:
+                logger.error(f"保存项目 {repo.full_name} 贡献者信息时出错: {e}")
+            # 即使贡献者获取失败，也不中断整个项目的处理
     
     def _save_contributor(self, contributor):
         """保存贡献者基本信息"""

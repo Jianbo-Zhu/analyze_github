@@ -125,12 +125,13 @@ class GitHubAPI:
             logger.error(f"获取项目 {repo.full_name} 语言信息时出错: {e}")
             return {}
     
-    def get_project_contributors(self, repo, max_count=None):
+    def get_project_contributors(self, repo, max_count=None, since_date=None):
         """获取项目贡献者（使用生成器优化）
         
         Args:
             repo: GitHub仓库对象
             max_count: 最大返回贡献者数量，None表示返回全部
+            since_date: 起始日期，只返回此日期之后有贡献的贡献者，None表示不限制
             
         Yields:
             Contributor: GitHub贡献者对象
@@ -138,24 +139,80 @@ class GitHubAPI:
         try:
             self.check_rate_limit()
             
-            # 获取贡献者生成器
-            contributors_generator = repo.get_contributors()
+            # 获取贡献者生成器时添加错误处理
+            try:
+                # 如果指定了起始日期，我们需要通过其他方式筛选
+                contributors_generator = repo.get_contributors()
+            except GithubException as e:
+                # 专门处理大型仓库的贡献者列表限制错误
+                if hasattr(e, 'status') and e.status == 403:
+                    error_message = str(e)
+                    if "contributor list is too large" in error_message:
+                        logger.warning(f"GitHub API限制：项目 {repo.full_name} 的贡献者列表过大，尝试使用分页模式获取部分贡献者")
+                        
+                        # 降级策略1：尝试只获取前50个贡献者（使用per_page参数）
+                        try:
+                            contributors_generator = repo.get_contributors(per_page=50)
+                            logger.info(f"成功应用降级策略，尝试获取项目 {repo.full_name} 的部分贡献者")
+                        except Exception as inner_e:
+                            logger.warning(f"降级策略失败，无法获取项目 {repo.full_name} 的贡献者: {inner_e}")
+                            # 放弃获取贡献者，直接返回空生成器
+                            return
+                    else:
+                        logger.error(f"GitHub API错误（403）：获取项目 {repo.full_name} 贡献者时出错: {e}")
+                        return
+                else:
+                    logger.error(f"GitHub API错误：获取项目 {repo.full_name} 贡献者时出错: {e}")
+                    return
+            except Exception as e:
+                logger.error(f"获取项目 {repo.full_name} 贡献者生成器时出错: {e}")
+                return
             
             count = 0
-            for contributor in contributors_generator:
-                yield contributor
-                count += 1
-                
-                # 每处理50个贡献者检查一次速率限制
-                if count % 50 == 0:
-                    self.check_rate_limit()
-                
-                # 如果达到最大数量限制，停止迭代
-                if max_count is not None and count >= max_count:
-                    break
+            filtered_count = 0
+            try:
+                for contributor in contributors_generator:
+                    # 如果指定了起始日期，我们需要检查贡献者是否在该日期后有提交
+                    if since_date:
+                        # 获取该贡献者在指定日期后的提交
+                        has_recent_contributions = False
+                        try:
+                            # 检查该贡献者是否在2025年以后有提交
+                            recent_commits = list(repo.get_commits(author=contributor, since=since_date))
+                            has_recent_contributions = len(recent_commits) > 0
+                        except Exception as e:
+                            logger.warning(f"检查贡献者 {contributor.login} 的近期提交时出错: {e}")
+                            # 如果出错，保守起见跳过该贡献者
+                            continue
+                        
+                        # 如果没有近期贡献，跳过
+                        if not has_recent_contributions:
+                            continue
+                        filtered_count += 1
+                    
+                    yield contributor
+                    count += 1
+                    
+                    # 每处理50个贡献者检查一次速率限制
+                    if count % 50 == 0:
+                        self.check_rate_limit()
+                    
+                    # 如果达到最大数量限制，停止迭代
+                    if max_count is not None and count >= max_count:
+                        logger.info(f"已达到最大贡献者数量限制 {max_count}，停止获取项目 {repo.full_name} 的贡献者")
+                        break
+                        
+            except GithubException as e:
+                # 处理迭代过程中的API错误
+                if hasattr(e, 'status') and e.status == 403:
+                    logger.warning(f"GitHub API限制：迭代项目 {repo.full_name} 贡献者时遇到限制，已处理 {count} 个贡献者")
+                else:
+                    logger.error(f"迭代项目 {repo.full_name} 贡献者时出错: {e}")
+                    
+            logger.debug(f"获取项目 {repo.full_name} 贡献者完成，共处理 {count} 个贡献者，过滤掉 {filtered_count} 个无近期贡献的贡献者")
                     
         except Exception as e:
-            logger.error(f"获取项目 {repo.full_name} 贡献者信息时出错: {e}")
+            logger.error(f"获取项目 {repo.full_name} 贡献者信息时发生未预期错误: {e}")
             return
     
     def get_contributor_details(self, username):
