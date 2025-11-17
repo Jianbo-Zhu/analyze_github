@@ -386,10 +386,13 @@ class DataCollector:
                             if result:
                                 contributor_id = result[0]['id']
                     
-                    # 保存提交记录（无论贡献者是否是新的，都保存提交）
-                    self._save_commit(project_id, contributor_id, commit_sha, commit_message, commit_date, 
-                                     commit_author.name, commit_author.email)
-                    commits_processed += 1
+                    # 只有当contributor_id有效时才保存提交记录，避免外键约束错误
+                    if contributor_id:
+                        self._save_commit(project_id, contributor_id, commit_sha, commit_message, commit_date, 
+                                         commit_author.name, commit_author.email)
+                        commits_processed += 1
+                    else:
+                        logger.warning(f"跳过提交 {commit_sha[:7]}，无法找到有效的贡献者ID")
                     
                     # 每处理100个提交检查一次
                     if commits_processed % 100 == 0:
