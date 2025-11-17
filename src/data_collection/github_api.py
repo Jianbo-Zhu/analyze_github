@@ -242,7 +242,45 @@ class GitHubAPI:
             logger.error(f"获取贡献者 {username} 详细信息时出错: {e}")
             return None
     
-    # 注意：get_recent_commits方法已被移除，不再获取提交数据
+    def get_commits(self, repo, max_count=1000, since_date=None):
+        """获取项目的提交记录
+        
+        Args:
+            repo: GitHub仓库对象
+            max_count: 最大返回提交数量，默认1000
+            since_date: 起始日期，只返回此日期之后的提交，None表示不限制
+            
+        Yields:
+            Commit: GitHub提交对象
+        """
+        try:
+            self.check_rate_limit()
+            
+            # 构建提交查询参数
+            query_params = {}
+            if since_date:
+                query_params['since'] = since_date
+            
+            # 获取提交生成器
+            commits_generator = repo.get_commits(**query_params)
+            
+            count = 0
+            for commit in commits_generator:
+                yield commit
+                count += 1
+                
+                # 每处理50个提交检查一次速率限制
+                if count % 50 == 0:
+                    self.check_rate_limit()
+                
+                # 如果达到最大数量限制，停止迭代
+                if count >= max_count:
+                    logger.info(f"已达到最大提交数量限制 {max_count}，停止获取项目 {repo.full_name} 的提交记录")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"获取项目 {repo.full_name} 提交记录时出错: {e}")
+            return
     
     def get_project_topics(self, repo):
         """获取项目主题标签

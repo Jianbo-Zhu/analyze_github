@@ -73,6 +73,7 @@ class DataCollector:
     def _save_project(self, repo):
         """保存项目基本信息"""
         try:
+            logger.info(f"开始处理项目基本信息: {repo.full_name}")
             # 检查项目是否已存在
             query = "SELECT id FROM projects WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (repo.id,))
@@ -119,7 +120,7 @@ class DataCollector:
             
             self.db_manager.execute_query(query, params)
             project_id = self.db_manager.get_last_insert_id()
-            logger.debug(f"保存项目 {repo.full_name} 成功，ID: {project_id}")
+            logger.info(f"项目基本信息处理完成: {repo.full_name}，ID: {project_id}")
             
             return project_id
             
@@ -130,10 +131,12 @@ class DataCollector:
     def _save_project_languages(self, repo):
         """保存项目语言信息"""
         try:
+            logger.info(f"开始处理项目语言信息: {repo.full_name}")
             # 获取项目ID
             query = "SELECT id FROM projects WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (repo.id,))
             if not result:
+                logger.info(f"项目 {repo.full_name} 不存在，跳过语言信息处理")
                 return
             
             project_id = result[0]['id']
@@ -159,7 +162,7 @@ class DataCollector:
                 params = (project_id, language_name, bytes_count, percentage, bytes_count, percentage)
                 self.db_manager.execute_query(query, params)
             
-            logger.debug(f"保存项目 {repo.full_name} 语言信息成功")
+            logger.info(f"项目语言信息处理完成: {repo.full_name}")
             
         except Exception as e:
             logger.error(f"保存项目 {repo.full_name} 语言信息时出错: {e}")
@@ -167,10 +170,12 @@ class DataCollector:
     def _save_project_topics(self, repo):
         """保存项目主题标签"""
         try:
+            logger.info(f"开始处理项目主题标签: {repo.full_name}")
             # 获取项目ID
             query = "SELECT id FROM projects WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (repo.id,))
             if not result:
+                logger.info(f"项目 {repo.full_name} 不存在，跳过主题标签处理")
                 return
             
             project_id = result[0]['id']
@@ -187,7 +192,7 @@ class DataCollector:
                 
                 self.db_manager.execute_query(query, (project_id, topic))
             
-            logger.debug(f"保存项目 {repo.full_name} 主题标签成功")
+            logger.info(f"项目主题标签处理完成: {repo.full_name}")
             
         except Exception as e:
             logger.error(f"保存项目 {repo.full_name} 主题标签时出错: {e}")
@@ -195,6 +200,7 @@ class DataCollector:
     def _count_pulls(self, repo):
         """计算PR数量（使用迭代器而非一次性加载所有PR）"""
         try:
+            logger.info(f"开始计算项目PR数量: {repo.full_name}")
             pulls_generator = repo.get_pulls(state='all')
             count = 0
             # 只计数不保存整个列表
@@ -202,7 +208,9 @@ class DataCollector:
                 count += 1
                 # 每处理100个PR检查一次速率限制
                 if count % 100 == 0:
+                    logger.debug(f"已计算项目 {repo.full_name} 的 {count} 个PR")
                     self.github_api.check_rate_limit()
+            logger.info(f"项目PR数量计算完成: {repo.full_name}，共 {count} 个PR")
             return count
         except Exception as e:
             logger.error(f"计算项目 {repo.full_name} PR数量时出错: {e}")
@@ -211,10 +219,12 @@ class DataCollector:
     def _save_project_statistics(self, repo):
         """保存项目统计信息"""
         try:
+            logger.info(f"开始处理项目统计信息: {repo.full_name}")
             # 获取项目ID
             query = "SELECT id FROM projects WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (repo.id,))
             if not result:
+                logger.info(f"项目 {repo.full_name} 不存在，跳计统计信息处理")
                 return
             
             project_id = result[0]['id']
@@ -265,13 +275,13 @@ class DataCollector:
             )
             
             self.db_manager.execute_query(query, params)
-            logger.debug(f"保存项目 {repo.full_name} 统计信息成功")
+            logger.info(f"项目统计信息处理完成: {repo.full_name}")
             
         except Exception as e:
             logger.error(f"保存项目 {repo.full_name} 统计信息时出错: {e}")
     
     def _save_contributors(self, repo):
-        """保存项目贡献者信息"""
+        """保存项目贡献者信息，优先使用从commit数据获取的方式"""
         try:
             # 获取项目ID
             query = "SELECT id FROM projects WHERE github_id = %s"
@@ -281,13 +291,160 @@ class DataCollector:
             
             project_id = result[0]['id']
             
+            # 尝试从commit数据获取贡献者信息
+            contributors_processed = self._save_contributors_from_commits(repo, project_id)
+            
+            # 如果从commit获取失败，尝试使用传统方式作为备用
+            if contributors_processed == 0:
+                logger.info(f"从commit数据获取贡献者信息失败或无贡献者，尝试使用传统方式获取项目 {repo.full_name} 的贡献者")
+                contributors_processed = self._save_contributors_from_api(repo, project_id)
+            
+            logger.info(f"保存项目 {repo.full_name} 贡献者信息成功，共处理 {contributors_processed} 个贡献者")
+            
+            # 更新项目的贡献者数量
+            query = "UPDATE projects SET contributors_count = %s WHERE id = %s"
+            self.db_manager.execute_query(query, (contributors_processed, project_id))
+            
+        except Exception as e:
+            logger.error(f"保存项目 {repo.full_name} 贡献者信息时出错: {e}")
+            # 即使贡献者获取失败，也不中断整个项目的处理
+    
+    def _save_contributors_from_commits(self, repo, project_id):
+        """从commit数据中获取并保存贡献者信息和提交数据
+        
+        Args:
+            repo: GitHub仓库对象
+            project_id: 项目ID
+            
+        Returns:
+            int: 处理的贡献者数量
+        """
+        try:
             # 设置起始日期为2025年1月1日
             import datetime
             since_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
-            logger.info(f"开始获取项目 {repo.full_name} 的2025年以来的贡献者")
+            logger.info(f"开始从commit数据获取项目 {repo.full_name} 的2025年以来的贡献者和提交记录")
+            
+            # 用于跟踪已处理的贡献者，避免重复处理
+            processed_contributors = set()
+            contributors_processed = 0
+            commits_processed = 0
+            
+            # 从commit数据中获取贡献者信息和提交数据
+            for commit in self.github_api.get_commits(repo, max_count=2000, since_date=since_date):
+                try:
+                    # 获取提交作者信息
+                    commit_author = commit.commit.author
+                    commit_sha = commit.sha
+                    commit_message = commit.commit.message
+                    commit_date = commit.commit.author.date
+                    
+                    # 尝试获取GitHub用户信息
+                    contributor = None
+                    contributor_id = None
+                    if commit.author:
+                        contributor = commit.author
+                    
+                    # 处理贡献者信息
+                    if not contributor and commit_author:
+                        # 使用作者名称和邮箱作为标识
+                        temp_contributor_id = f"{commit_author.name}-{commit_author.email}" if commit_author.email else commit_author.name
+                        
+                        # 如果是新贡献者，保存其信息
+                        if temp_contributor_id not in processed_contributors:
+                            # 创建一个临时对象来保存必要的信息
+                            class TempContributor:
+                                def __init__(self, name, email):
+                                    self.id = name + (email if email else '')
+                                    self.login = name
+                                    self.avatar_url = None
+                                    self.html_url = None
+                                    self.contributions = 1
+                                    
+                            # 使用临时贡献者对象
+                            temp_contributor = TempContributor(commit_author.name, commit_author.email)
+                            contributor_id = self._save_contributor(temp_contributor)
+                            
+                            processed_contributors.add(temp_contributor_id)
+                            contributors_processed += 1
+                        else:
+                            # 如果是已存在的贡献者，查找其ID
+                            query = "SELECT id FROM contributors WHERE github_id = %s"
+                            result = self.db_manager.execute_query(query, (temp_contributor_id,))
+                            if result:
+                                contributor_id = result[0]['id']
+                    elif contributor:
+                        # 如果有GitHub用户信息，使用正常的贡献者处理逻辑
+                        if contributor.id not in processed_contributors:
+                            contributor_id = self._save_contributor(contributor)
+                            processed_contributors.add(contributor.id)
+                            contributors_processed += 1
+                        else:
+                            # 如果是已存在的贡献者，查找其ID
+                            query = "SELECT id FROM contributors WHERE github_id = %s"
+                            result = self.db_manager.execute_query(query, (contributor.id,))
+                            if result:
+                                contributor_id = result[0]['id']
+                    
+                    # 保存提交记录（无论贡献者是否是新的，都保存提交）
+                    self._save_commit(project_id, contributor_id, commit_sha, commit_message, commit_date, 
+                                     commit_author.name, commit_author.email)
+                    commits_processed += 1
+                    
+                    # 每处理100个提交检查一次
+                    if commits_processed % 100 == 0:
+                        logger.debug(f"已处理项目 {repo.full_name} 的 {commits_processed} 个提交记录")
+                
+                except Exception as e:
+                    logger.warning(f"处理提交 {commit.sha} 时出错: {e}")
+                    continue
+            
+            # 更新项目的提交数量统计
+            self._update_project_commits_count(project_id, commits_processed)
+            
+            logger.info(f"从commit数据获取项目 {repo.full_name} 贡献者和提交信息完成，共处理 {contributors_processed} 个贡献者和 {commits_processed} 个提交记录")
+            return contributors_processed
+            
+        except Exception as e:
+            logger.error(f"从commit数据获取项目 {repo.full_name} 贡献者和提交信息时出错: {e}")
+            return 0
+    
+    def _update_project_commits_count(self, project_id, commits_count):
+        """更新项目的提交数量统计
+        
+        Args:
+            project_id: 项目ID
+            commits_count: 提交数量
+        """
+        try:
+            logger.info(f"开始更新项目ID {project_id} 的提交数量统计")
+            # 更新statistics表中的提交数量
+            query = "UPDATE statistics SET total_commits = %s WHERE project_id = %s"
+            self.db_manager.execute_query(query, (commits_count, project_id))
+            
+            logger.info(f"项目ID {project_id} 的提交数量统计更新完成，共 {commits_count} 个提交")
+            
+        except Exception as e:
+            logger.error(f"更新项目ID {project_id} 的提交数量时出错: {e}")
+    
+    
+    def _save_contributors_from_api(self, repo, project_id):
+        """使用GitHub API传统方式获取贡献者信息（备用方法）
+        
+        Args:
+            repo: GitHub仓库对象
+            project_id: 项目ID
+            
+        Returns:
+            int: 处理的贡献者数量
+        """
+        try:
+            # 设置起始日期为2025年1月1日
+            import datetime
+            since_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+            logger.info(f"使用传统API方式获取项目 {repo.full_name} 的2025年以来的贡献者")
             
             # 使用生成器获取贡献者，避免一次性加载所有贡献者
-            # 限制处理最多1000个贡献者，避免处理过多数据
             contributors_processed = 0
             for contributor in self.github_api.get_project_contributors(repo, max_count=1000, since_date=since_date):
                 # 保存贡献者信息
@@ -303,31 +460,55 @@ class DataCollector:
                 if contributors_processed % 100 == 0:
                     logger.debug(f"已处理项目 {repo.full_name} 的 {contributors_processed} 个贡献者")
             
-            logger.info(f"保存项目 {repo.full_name} 贡献者信息成功，共处理 {contributors_processed} 个2025年以来的贡献者")
-            
-            # 更新项目的贡献者数量
-            query = "UPDATE projects SET contributors_count = %s WHERE id = %s"
-            self.db_manager.execute_query(query, (contributors_processed, project_id))
+            return contributors_processed
             
         except Exception as e:
             # 专门处理大型仓库的API限制错误
             error_message = str(e)
             if "contributor list is too large" in error_message or "403" in error_message:
                 logger.warning(f"GitHub API限制：无法获取项目 {repo.full_name} 的贡献者列表，这是因为仓库历史或贡献者列表过大")
-                # 在这里可以添加降级策略，比如只获取前N个贡献者
             else:
-                logger.error(f"保存项目 {repo.full_name} 贡献者信息时出错: {e}")
-            # 即使贡献者获取失败，也不中断整个项目的处理
+                logger.error(f"使用API方式获取项目 {repo.full_name} 贡献者信息时出错: {e}")
+            return 0
+    
+    def _save_commit(self, project_id, contributor_id, sha, message, created_at, author_name, author_email):
+        """保存提交记录信息"""
+        try:
+            logger.info(f"开始处理提交记录: {sha[:7]}")
+            # 检查提交是否已存在
+            query = "SELECT id FROM commits WHERE project_id = %s AND sha = %s"
+            result = self.db_manager.execute_query(query, (project_id, sha))
+            
+            if result:
+                logger.info(f"提交记录 {sha[:7]} 已存在，跳过处理")
+                return
+            
+            # 插入新提交记录
+            query = """
+            INSERT INTO commits (project_id, contributor_id, sha, message, created_at, author_name, author_email)
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            params = (project_id, contributor_id, sha, message, created_at, author_name, author_email)
+            self.db_manager.execute_query(query, params)
+            logger.info(f"提交记录处理完成: {sha[:7]}")
+            
+        except Exception as e:
+            logger.error(f"保存提交记录 {sha} 时出错: {e}")
+    
     
     def _save_contributor(self, contributor):
         """保存贡献者基本信息"""
         try:
+            logger.info(f"开始处理贡献者信息: {contributor.login}")
             # 检查贡献者是否已存在
             query = "SELECT id FROM contributors WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (contributor.id,))
             
             if result:
-                return result[0]['id']
+                contributor_id = result[0]['id']
+                logger.info(f"贡献者 {contributor.login} 已存在，ID: {contributor_id}")
+                return contributor_id
             
             # 获取详细信息
             details = self.github_api.get_contributor_details(contributor.login)
@@ -352,8 +533,9 @@ class DataCollector:
                 details.get('created_at') if details else None
             )
             
-            self.db_manager.execute_query(query, params)
-            return self.db_manager.get_last_insert_id()
+            contributor_id = self.db_manager.get_last_insert_id()
+            logger.info(f"贡献者信息处理完成: {contributor.login}，ID: {contributor_id}")
+            return contributor_id
             
         except Exception as e:
             logger.error(f"保存贡献者 {contributor.login} 时出错: {e}")
@@ -362,6 +544,7 @@ class DataCollector:
     def _save_project_contributor(self, project_id, contributor_id, contributions):
         """保存项目-贡献者关联"""
         try:
+            logger.info(f"开始处理项目-贡献者关联: 项目ID {project_id}，贡献者ID {contributor_id}")
             query = """
             INSERT INTO project_contributors (project_id, contributor_id, contributions)
             VALUES (%s, %s, %s)
@@ -369,6 +552,7 @@ class DataCollector:
             """
             
             self.db_manager.execute_query(query, (project_id, contributor_id, contributions, contributions))
+            logger.info(f"项目-贡献者关联处理完成: 项目ID {project_id}，贡献者ID {contributor_id}")
             
         except Exception as e:
             logger.error(f"保存项目-贡献者关联时出错: {e}")
