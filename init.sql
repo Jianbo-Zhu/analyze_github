@@ -96,6 +96,29 @@ CREATE TABLE IF NOT EXISTS topics (
     UNIQUE KEY unique_project_topic (project_id, topic_name)
 );
 
+-- PR信息表
+CREATE TABLE IF NOT EXISTS pull_requests (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    project_id INT NOT NULL,
+    pr_number INT NOT NULL,
+    title VARCHAR(255) NOT NULL,
+    body TEXT,
+    state VARCHAR(20) NOT NULL,
+    creator_id BIGINT,
+    created_at DATETIME,
+    updated_at DATETIME,
+    closed_at DATETIME,
+    merged_at DATETIME,
+    merged BOOLEAN,
+    commits_count INT,
+    additions INT,
+    deletions INT,
+    changed_files INT,
+    FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
+    FOREIGN KEY (creator_id) REFERENCES contributors(github_id) ON DELETE SET NULL,
+    UNIQUE KEY unique_pr (project_id, pr_number)
+);
+
 -- 索引优化
 CREATE INDEX idx_projects_stargazers ON projects(stargazers_count);
 CREATE INDEX idx_projects_forks ON projects(forks_count);
@@ -104,3 +127,6 @@ CREATE INDEX idx_contributors_location ON contributors(location);
 CREATE INDEX idx_commits_created_at ON commits(created_at);
 CREATE INDEX idx_languages_language_name ON languages(language_name);
 CREATE INDEX idx_topics_topic_name ON topics(topic_name);
+CREATE INDEX idx_pull_requests_created_at ON pull_requests(created_at);
+CREATE INDEX idx_pull_requests_state ON pull_requests(state);
+CREATE INDEX idx_pull_requests_creator_id ON pull_requests(creator_id);

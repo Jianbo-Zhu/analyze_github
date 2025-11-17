@@ -1,6 +1,6 @@
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from src.data_collection.github_api import github_api
 from src.utils.database import db_manager
 from src.utils.logger import data_collection_logger
@@ -14,6 +14,12 @@ class DataCollector:
     def __init__(self):
         self.github_api = github_api
         self.db_manager = db_manager
+        # 提取为类常量，避免重复定义
+        # 注意：用户确认2025年是正确的时间设置
+        self.since_date = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        self.DEFAULT_MAX_COUNT = 2000  # 默认最大记录数
+        self.CHECK_INTERVAL = 100  # 检查间隔
+        logger.info("数据采集器初始化完成")
     
     def initialize_collection(self):
         """初始化数据采集过程"""
@@ -61,6 +67,12 @@ class DataCollector:
                     self._save_contributors(repo)
                 except Exception as e:
                     logger.warning(f"保存项目 {repo.full_name} 贡献者信息时出错，继续处理其他数据: {e}")
+                
+                # 保存PR记录（仅2025年以来的），但允许失败继续
+                try:
+                    self._save_pull_requests(repo)
+                except Exception as e:
+                    logger.warning(f"保存项目 {repo.full_name} PR记录时出错，继续处理其他数据: {e}")
                 
                 logger.info(f"项目 {repo.full_name} 数据采集完成")
                 
@@ -197,24 +209,7 @@ class DataCollector:
         except Exception as e:
             logger.error(f"保存项目 {repo.full_name} 主题标签时出错: {e}")
     
-    def _count_pulls(self, repo):
-        """计算PR数量（使用迭代器而非一次性加载所有PR）"""
-        try:
-            logger.info(f"开始计算项目PR数量: {repo.full_name}")
-            pulls_generator = repo.get_pulls(state='all')
-            count = 0
-            # 只计数不保存整个列表
-            for _ in pulls_generator:
-                count += 1
-                # 每处理100个PR检查一次速率限制
-                if count % 100 == 0:
-                    logger.debug(f"已计算项目 {repo.full_name} 的 {count} 个PR")
-                    self.github_api.check_rate_limit()
-            logger.info(f"项目PR数量计算完成: {repo.full_name}，共 {count} 个PR")
-            return count
-        except Exception as e:
-            logger.error(f"计算项目 {repo.full_name} PR数量时出错: {e}")
-            return 0
+
     
     def _save_project_statistics(self, repo):
         """保存项目统计信息"""
@@ -233,7 +228,7 @@ class DataCollector:
             stats = {
                 'total_commits': None,  # 不再获取提交数量
                 'total_issues': repo.open_issues_count,
-                'total_pulls': self._count_pulls(repo),  # 使用优化后的方法计算PR数量
+                'total_pulls': 0,  # 先设置为0，后续在保存PR数据时会更新
                 'contributors_count': 0,  # 避免再次触发API调用，使用默认值
                 'watchers_count': repo.subscribers_count,
                 'network_count': repo.network_count,
@@ -249,7 +244,7 @@ class DataCollector:
                 created_month, updated_month
             ) VALUES (%s, NULL, %s, %s, %s, %s, %s, %s, %s)
             ON DUPLICATE KEY UPDATE
-                total_issues = %s, total_pulls = %s,
+                total_issues = %s, 
                 contributors_count = %s, watchers_count = %s, network_count = %s,
                 created_month = %s, updated_month = %s
             """
@@ -266,7 +261,6 @@ class DataCollector:
                 stats['updated_month'],
                 # 更新参数
                 stats['total_issues'],
-                stats['total_pulls'],
                 stats['contributors_count'],
                 stats['watchers_count'],
                 stats['network_count'],
@@ -279,6 +273,139 @@ class DataCollector:
             
         except Exception as e:
             logger.error(f"保存项目 {repo.full_name} 统计信息时出错: {e}")
+    
+    def _save_pull_request(self, pr, project_id):
+        """保存单个PR记录信息
+        
+        Args:
+            pr: GitHub PR对象
+            project_id: 项目ID
+        """
+        try:
+            logger.info(f"开始处理PR记录: #{pr.number} - {pr.title[:50]}..." if len(pr.title) > 50 else f"开始处理PR记录: #{pr.number} - {pr.title}")
+            
+            # 检查PR是否已存在
+            query = "SELECT id FROM pull_requests WHERE project_id = %s AND pr_number = %s"
+            result = self.db_manager.execute_query(query, (project_id, pr.number))
+            
+            if result:
+                logger.info(f"PR记录 #{pr.number} 已存在，跳过处理")
+                return
+            
+            # 获取PR创建者的ID
+            creator_id = None
+            if pr.user:
+                # 创建临时贡献者对象
+                class TempContributor:
+                    def __init__(self, user):
+                        self.id = user.id
+                        self.login = user.login
+                        self.avatar_url = user.avatar_url
+                        self.html_url = user.html_url
+                        self.contributions = 0  # PR创建不计入贡献数
+                
+                temp_contributor = TempContributor(pr.user)
+                creator_id = self._save_contributor(temp_contributor)
+            
+            # 获取PR详情（包含commits_count、additions、deletions、changed_files）
+            # 避免重复API调用，直接使用已有信息
+            merged_at = pr.merged_at if hasattr(pr, 'merged_at') and pr.merged_at else None
+            merged = pr.merged if hasattr(pr, 'merged') else False
+            
+            # 准备PR数据
+            # 添加基础统计信息，详细信息可以通过单独调用获取
+            commits_count = 0
+            additions = 0
+            deletions = 0
+            changed_files = 0
+            
+            # 尝试获取更详细信息但不强制依赖
+            try:
+                pr_details = pr.as_pull_request()  # 转换为完整的PullRequest对象
+                commits_count = pr_details.commits if pr_details else 0
+                additions = pr_details.additions if pr_details else 0
+                deletions = pr_details.deletions if pr_details else 0
+                changed_files = pr_details.changed_files if pr_details else 0
+            except Exception as e:
+                logger.warning(f"获取PR #{pr.number} 详情时出错: {e}，使用默认值")
+            
+            # 插入新PR记录
+            query = """
+            INSERT INTO pull_requests (
+                project_id, pr_number, title, body, state, creator_id, 
+                created_at, updated_at, closed_at, merged_at, merged,
+                commits_count, additions, deletions, changed_files
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            
+            params = (
+                project_id,
+                pr.number,
+                pr.title,
+                pr.body,
+                pr.state,
+                creator_id,
+                pr.created_at,
+                pr.updated_at,
+                pr.closed_at,
+                pr.merged_at,
+                pr.merged,
+                commits_count,
+                additions,
+                deletions,
+                changed_files
+            )
+            
+            self.db_manager.execute_query(query, params)
+            logger.info(f"PR记录处理完成: #{pr.number}")
+            
+        except Exception as e:
+            logger.error(f"保存PR记录 #{pr.number} 时出错: {e}")
+    
+    def _save_pull_requests(self, repo):
+        """保存项目的PR记录（仅保存2025年以来的）"""
+        try:
+            logger.info(f"开始保存项目 {repo.full_name} 的PR记录（仅2025年以来）")
+            
+            # 获取项目ID
+            query = "SELECT id FROM projects WHERE github_id = %s"
+            result = self.db_manager.execute_query(query, (repo.id,))
+            if not result:
+                logger.info(f"项目 {repo.full_name} 不存在，跳过PR记录处理")
+                return 0
+            
+            project_id = result[0]['id']
+            
+            # 从PR数据中获取并保存PR记录
+            prs_processed = 0
+            for pr in self.github_api.get_pulls(repo, max_count=self.DEFAULT_MAX_COUNT, since_date=self.since_date):
+                try:
+                    self._save_pull_request(pr, project_id)
+                    prs_processed += 1
+                    
+                    # 每处理CHECK_INTERVAL个PR检查一次
+                    if prs_processed % self.CHECK_INTERVAL == 0:
+                        logger.debug(f"已处理项目 {repo.full_name} 的 {prs_processed} 个PR记录")
+                        # 定期更新统计信息，避免中途出错导致数据不一致
+                        query = "UPDATE statistics SET total_pulls = %s WHERE project_id = %s"
+                        self.db_manager.execute_query(query, (prs_processed, project_id))
+                        logger.debug(f"已更新项目ID {project_id} 的PR统计数量: {prs_processed}")
+                except Exception as e:
+                    logger.error(f"处理PR #{pr.number} 时出错: {e}，继续处理下一个PR")
+                    continue
+            
+            # 更新项目统计信息中的PR数量
+            if prs_processed > 0:
+                query = "UPDATE statistics SET total_pulls = %s WHERE project_id = %s"
+                self.db_manager.execute_query(query, (prs_processed, project_id))
+                logger.info(f"已更新项目 {repo.full_name} 的PR统计数量为 {prs_processed}")
+            
+            logger.info(f"项目 {repo.full_name} 的PR记录保存完成，共处理 {prs_processed} 个PR")
+            return prs_processed
+            
+        except Exception as e:
+            logger.error(f"保存项目 {repo.full_name} 的PR记录时出错: {e}")
+            return 0
     
     def _save_contributors(self, repo):
         """保存项目贡献者信息，优先使用从commit数据获取的方式"""
@@ -320,9 +447,8 @@ class DataCollector:
             int: 处理的贡献者数量
         """
         try:
-            # 设置起始日期为2025年1月1日
-            import datetime
-            since_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+            # 使用类中已定义的since_date
+            since_date = self.since_date
             logger.info(f"开始从commit数据获取项目 {repo.full_name} 的2025年以来的贡献者和提交记录")
             
             # 用于跟踪已处理的贡献者，避免重复处理
@@ -442,9 +568,8 @@ class DataCollector:
             int: 处理的贡献者数量
         """
         try:
-            # 设置起始日期为2025年1月1日
-            import datetime
-            since_date = datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc)
+            # 使用类中已定义的since_date
+            since_date = self.since_date
             logger.info(f"使用传统API方式获取项目 {repo.full_name} 的2025年以来的贡献者")
             
             # 使用生成器获取贡献者，避免一次性加载所有贡献者

@@ -13,6 +13,9 @@ class GitHubAPI:
     def __init__(self):
         self.github = None
         self.rate_limit_wait = config.GITHUB_API_RATE_LIMIT_WAIT
+        self.DEFAULT_MAX_COUNT = 2000  # 默认最大记录数
+        self.CHECK_INTERVAL = 50  # API检查间隔
+        self.BUFFER_REMAINING = 10  # API剩余请求缓冲
     
     def authenticate(self):
         """认证GitHub API"""
@@ -34,17 +37,22 @@ class GitHubAPI:
     
     def check_rate_limit(self):
         """检查并处理API速率限制"""
-        remaining, limit = self.github.rate_limiting
-        reset_time = self.github.rate_limiting_resettime
-        
-        logger.info(f"API速率限制: 剩余 {remaining}/{limit} 次请求，重置时间: {datetime.fromtimestamp(reset_time)}")
-        
-        # 如果剩余请求次数不足，等待重置
-        if remaining < 10:
-            wait_time = max(reset_time - time.time() + 10, self.rate_limit_wait)
-            logger.warning(f"API请求次数即将耗尽，等待 {wait_time:.2f} 秒...")
-            time.sleep(wait_time)
-            logger.info("等待完成，继续执行")
+        try:
+            remaining, limit = self.github.rate_limiting
+            reset_time = self.github.rate_limiting_resettime
+            
+            logger.debug(f"API速率限制: 剩余 {remaining}/{limit} 次请求，重置时间: {datetime.fromtimestamp(reset_time)}")
+            
+            # 如果剩余请求次数不足，等待重置
+            if remaining < self.BUFFER_REMAINING:
+                wait_time = max(reset_time - time.time() + 5, self.rate_limit_wait)
+                logger.warning(f"API请求次数即将耗尽，等待 {wait_time:.2f} 秒...")
+                time.sleep(wait_time)
+                logger.info("等待完成，继续执行")
+        except Exception as e:
+            logger.error(f"检查API速率限制时出错: {e}")
+            # 发生错误时等待一段安全时间
+            time.sleep(self.rate_limit_wait)
     
     def search_projects(self, query, sort='stars', order='desc', per_page=100):
         """搜索GitHub项目
@@ -242,18 +250,22 @@ class GitHubAPI:
             logger.error(f"获取贡献者 {username} 详细信息时出错: {e}")
             return None
     
-    def get_commits(self, repo, max_count=1000, since_date=None):
+    def get_commits(self, repo, max_count=None, since_date=None):
         """获取项目的提交记录
         
         Args:
             repo: GitHub仓库对象
-            max_count: 最大返回提交数量，默认1000
+            max_count: 最大返回提交数量，None表示使用默认值
             since_date: 起始日期，只返回此日期之后的提交，None表示不限制
             
         Yields:
             Commit: GitHub提交对象
         """
         try:
+            # 使用默认最大数量
+            if max_count is None:
+                max_count = self.DEFAULT_MAX_COUNT
+            
             self.check_rate_limit()
             
             # 构建提交查询参数
@@ -269,8 +281,8 @@ class GitHubAPI:
                 yield commit
                 count += 1
                 
-                # 每处理50个提交检查一次速率限制
-                if count % 50 == 0:
+                # 每处理CHECK_INTERVAL个提交检查一次速率限制
+                if count % self.CHECK_INTERVAL == 0:
                     self.check_rate_limit()
                 
                 # 如果达到最大数量限制，停止迭代
@@ -298,6 +310,58 @@ class GitHubAPI:
         except Exception as e:
             logger.error(f"获取项目 {repo.full_name} 主题标签时出错: {e}")
             return []
+    
+    def get_pulls(self, repo, max_count=None, since_date=None):
+        """获取项目的PR记录
+        
+        Args:
+            repo: GitHub仓库对象
+            max_count: 最大返回PR数量，None表示使用默认值
+            since_date: 起始日期，只返回此日期之后的PR，None表示不限制
+            
+        Yields:
+            PullRequest: GitHub PR对象
+        """
+        try:
+            # 使用默认最大数量
+            if max_count is None:
+                max_count = self.DEFAULT_MAX_COUNT
+            
+            self.check_rate_limit()
+            
+            # 构建PR查询参数
+            query_params = {
+                'state': 'all',
+                'sort': 'updated',
+                'direction': 'desc'
+            }
+            if since_date:
+                query_params['since'] = since_date
+            
+            # 获取PR生成器
+            pulls_generator = repo.get_pulls(**query_params)
+            
+            count = 0
+            for pr in pulls_generator:
+                # 如果指定了起始日期，再次过滤确保PR创建时间在起始日期之后
+                if since_date and pr.created_at < since_date:
+                    break  # 由于按更新时间降序排序，一旦找到早于起始日期的PR，后续PR也会更早，可以停止迭代
+                
+                yield pr
+                count += 1
+                
+                # 每处理CHECK_INTERVAL个PR检查一次速率限制
+                if count % self.CHECK_INTERVAL == 0:
+                    self.check_rate_limit()
+                
+                # 如果达到最大数量限制，停止迭代
+                if count >= max_count:
+                    logger.info(f"已达到最大PR数量限制 {max_count}，停止获取项目 {repo.full_name} 的PR记录")
+                    break
+                    
+        except Exception as e:
+            logger.error(f"获取项目 {repo.full_name} PR记录时出错: {e}")
+            return
 
 # 创建全局GitHub API实例
 github_api = GitHubAPI()
