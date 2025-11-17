@@ -369,10 +369,10 @@ class DataCollector:
                             contributors_processed += 1
                         else:
                             # 如果是已存在的贡献者，查找其ID
-                            query = "SELECT id FROM contributors WHERE github_id = %s"
+                            query = "SELECT github_id FROM contributors WHERE github_id = %s"
                             result = self.db_manager.execute_query(query, (temp_contributor_id,))
                             if result:
-                                contributor_id = result[0]['id']
+                                contributor_id = result[0]['github_id']
                     elif contributor:
                         # 如果有GitHub用户信息，使用正常的贡献者处理逻辑
                         if contributor.id not in processed_contributors:
@@ -381,10 +381,10 @@ class DataCollector:
                             contributors_processed += 1
                         else:
                             # 如果是已存在的贡献者，查找其ID
-                            query = "SELECT id FROM contributors WHERE github_id = %s"
+                            query = "SELECT github_id FROM contributors WHERE github_id = %s"
                             result = self.db_manager.execute_query(query, (contributor.id,))
                             if result:
-                                contributor_id = result[0]['id']
+                                contributor_id = result[0]['github_id']
                     
                     # 只有当contributor_id有效时才保存提交记录，避免外键约束错误
                     if contributor_id:
@@ -501,22 +501,45 @@ class DataCollector:
     
     
     def _save_contributor(self, contributor):
-        """保存贡献者基本信息"""
+        """保存贡献者基本信息到数据库
+        
+        此方法负责将GitHub贡献者信息保存到contributors表中，采用"先检查后插入"的策略，
+        避免数据重复。如果贡献者已存在，则直接返回其ID；如果不存在，则插入新记录。
+        
+        Args:
+            contributor: 贡献者对象，包含以下必要属性：
+                        - id: GitHub用户ID，用于唯一标识贡献者
+                        - login: GitHub用户名
+                        - avatar_url: 头像URL
+                        - html_url: 用户GitHub主页URL
+                        - contributions: 贡献数量
+        
+        Returns:
+            int or None: 成功时返回贡献者在数据库中的ID，失败时返回None
+            
+        Raises:
+            Exception: 当数据库操作失败时抛出异常，但会被方法内部捕获并记录
+        """
         try:
+            # 记录方法开始执行的日志
             logger.info(f"开始处理贡献者信息: {contributor.login}")
-            # 检查贡献者是否已存在
-            query = "SELECT id FROM contributors WHERE github_id = %s"
+            
+            # 检查贡献者是否已存在于数据库中
+            # 使用GitHub用户ID作为唯一标识进行查询
+            query = "SELECT github_id FROM contributors WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (contributor.id,))
             
+            # 如果贡献者已存在，直接返回其github_id（现在作为主键）
             if result:
-                contributor_id = result[0]['id']
+                contributor_id = result[0]['github_id']
                 logger.info(f"贡献者 {contributor.login} 已存在，ID: {contributor_id}")
                 return contributor_id
             
-            # 获取详细信息
+            # 如果贡献者不存在，通过GitHub API获取更详细的用户信息
+            # 这包括电子邮件、位置、公司等非必要但有用的信息
             details = self.github_api.get_contributor_details(contributor.login)
             
-            # 插入新贡献者
+            # 构建插入新贡献者记录的SQL查询
             query = """
             INSERT INTO contributors (
                 github_id, username, avatar_url, html_url, 
@@ -524,24 +547,36 @@ class DataCollector:
             ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
+            # 准备SQL查询参数，使用字典get方法安全获取可能不存在的详细信息
             params = (
-                contributor.id,
-                contributor.login,
-                contributor.avatar_url,
-                contributor.html_url,
-                contributor.contributions,
-                details.get('email') if details else None,
-                details.get('location') if details else None,
-                details.get('company') if details else None,
-                details.get('created_at') if details else None
+                contributor.id,              # GitHub用户ID
+                contributor.login,           # GitHub用户名
+                contributor.avatar_url,      # 用户头像URL
+                contributor.html_url,        # 用户GitHub主页URL
+                contributor.contributions,   # 对项目的贡献数量
+                details.get('email') if details else None,    # 电子邮件（可能不存在）
+                details.get('location') if details else None, # 位置信息（可能不存在）
+                details.get('company') if details else None,  # 公司信息（可能不存在）
+                details.get('created_at') if details else None # 账号创建时间（可能不存在）
             )
             
-            contributor_id = self.db_manager.get_last_insert_id()
+            # 执行插入操作
+            self.db_manager.execute_query(query, params)
+            
+            # 由于github_id现在是主键，直接使用contributor.id作为返回值
+            contributor_id = contributor.id
+            
+            # 记录方法执行完成的日志
             logger.info(f"贡献者信息处理完成: {contributor.login}，ID: {contributor_id}")
+            
+            # 返回新贡献者的ID
             return contributor_id
             
         except Exception as e:
+            # 捕获所有异常，记录错误日志
             logger.error(f"保存贡献者 {contributor.login} 时出错: {e}")
+            
+            # 发生错误时返回None
             return None
     
     def _save_project_contributor(self, project_id, contributor_id, contributions):

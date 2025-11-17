@@ -36,8 +36,7 @@ CREATE TABLE IF NOT EXISTS languages (
 
 -- 贡献者信息表
 CREATE TABLE IF NOT EXISTS contributors (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    github_id BIGINT UNIQUE,
+    github_id BIGINT PRIMARY KEY,
     username VARCHAR(255) NOT NULL,
     avatar_url VARCHAR(255),
     html_url VARCHAR(255),
@@ -51,25 +50,25 @@ CREATE TABLE IF NOT EXISTS contributors (
 -- 项目-贡献者关联表
 CREATE TABLE IF NOT EXISTS project_contributors (
     project_id INT NOT NULL,
-    contributor_id INT NOT NULL,
+    contributor_id BIGINT NOT NULL,
     contributions INT,
     PRIMARY KEY (project_id, contributor_id),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-    FOREIGN KEY (contributor_id) REFERENCES contributors(id) ON DELETE CASCADE
+    FOREIGN KEY (contributor_id) REFERENCES contributors(github_id) ON DELETE CASCADE
 );
 
 -- 提交记录表
 CREATE TABLE IF NOT EXISTS commits (
     id INT AUTO_INCREMENT PRIMARY KEY,
     project_id INT NOT NULL,
-    contributor_id INT,
+    contributor_id BIGINT,
     sha VARCHAR(40) NOT NULL,
     message TEXT,
     created_at DATETIME,
     author_name VARCHAR(255),
     author_email VARCHAR(255),
     FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE,
-    FOREIGN KEY (contributor_id) REFERENCES contributors(id) ON DELETE SET NULL,
+    FOREIGN KEY (contributor_id) REFERENCES contributors(github_id) ON DELETE SET NULL,
     UNIQUE KEY unique_commit (project_id, sha)
 );
 
