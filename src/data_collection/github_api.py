@@ -27,7 +27,7 @@ class GitHubAPI:
         """认证GitHub API"""
         try:
             if config.GITHUB_TOKEN:
-                self.github = Github(config.GITHUB_TOKEN)
+                self.github = Github(config.GITHUB_TOKEN, per_page=100)
                 logger.info("使用GitHub Token进行认证")
             else:
                 self.github = Github()
@@ -68,14 +68,13 @@ class GitHubAPI:
             # 发生错误时等待一段安全时间
             time.sleep(self.rate_limit_wait)
     
-    def search_projects(self, query, sort='stars', order='desc', per_page=100):
+    def search_projects(self, query, sort='stars', order='desc'):
         """搜索GitHub项目
         
         Args:
             query: 搜索查询字符串
             sort: 排序字段 (stars, forks, updated)
             order: 排序顺序 (desc, asc)
-            per_page: 每页结果数量
             
         Yields:
             Repository: GitHub仓库对象
@@ -90,8 +89,7 @@ class GitHubAPI:
             search_results = self.github.search_repositories(
                 query=query,
                 sort=sort,
-                order=order,
-                per_page=per_page
+                order=order
             )
             
             count = 0
@@ -268,9 +266,7 @@ class GitHubAPI:
             self.check_rate_limit()
             
             # 构建提交查询参数
-            query_params = {
-                'per_page': 100
-            }
+            query_params = {}
             if since_date:
                 query_params['since'] = since_date
             
@@ -334,8 +330,7 @@ class GitHubAPI:
             query_params = {
                 'state': 'all',
                 'sort': 'updated',
-                'direction': 'desc',
-                'per_page': 100
+                'direction': 'desc'
             }
             
             # 获取PR生成器
