@@ -8,7 +8,6 @@ CREATE TABLE IF NOT EXISTS projects (
     name VARCHAR(255) NOT NULL,
     full_name VARCHAR(255) NOT NULL UNIQUE,
     owner_id BIGINT,
-    FOREIGN KEY (owner_id) REFERENCES contributors(github_id) ON DELETE SET NULL,
     description TEXT,
     created_at DATETIME,
     updated_at DATETIME,
@@ -135,3 +134,7 @@ CREATE INDEX idx_topics_topic_name ON topics(topic_name);
 CREATE INDEX idx_pull_requests_created_at ON pull_requests(created_at);
 CREATE INDEX idx_pull_requests_state ON pull_requests(state);
 CREATE INDEX idx_pull_requests_creator_id ON pull_requests(creator_id);
+
+-- Fix the foreign key constraint definition
+ALTER TABLE projects ADD CONSTRAINT fk_projects_owner_id 
+FOREIGN KEY (owner_id) REFERENCES contributors(github_id) ON DELETE SET NULL;
