@@ -82,7 +82,8 @@ class GitHubAPI:
             search_results = self.github.search_repositories(
                 query=query,
                 sort=sort,
-                order=order
+                order=order,
+                per_page=per_page
             )
             
             count = 0
