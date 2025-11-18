@@ -4,7 +4,6 @@ services:
   app:
     build: .
     container_name: github_analyzer_app
-    restart: always
     volumes:
       - ./:/app
       - ./output:/app/output
