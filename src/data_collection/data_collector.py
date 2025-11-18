@@ -550,11 +550,6 @@ class DataCollector:
             # 尝试从commit数据获取贡献者信息
             contributors_processed = self._save_contributors_from_commits(repo, project_id)
             
-            # 如果从commit获取失败，尝试使用传统方式作为备用
-            if contributors_processed == 0:
-                logger.info(f"从commit数据获取贡献者信息失败或无贡献者，尝试使用传统方式获取项目 {repo.full_name} 的贡献者")
-                contributors_processed = self._save_contributors_from_api(repo, project_id)
-            
             logger.info(f"保存项目 {repo.full_name} 贡献者信息成功，共处理 {contributors_processed} 个贡献者")
             
             # 更新项目的贡献者数量
@@ -685,48 +680,6 @@ class DataCollector:
         except Exception as e:
             logger.error(f"更新项目ID {project_id} 的提交数量时出错: {e}")
     
-    
-    def _save_contributors_from_api(self, repo, project_id):
-        """使用GitHub API传统方式获取贡献者信息（备用方法）
-        
-        Args:
-            repo: GitHub仓库对象
-            project_id: 项目ID
-            
-        Returns:
-            int: 处理的贡献者数量
-        """
-        try:
-            # 使用类中已定义的since_date
-            since_date = self.since_date
-            logger.info(f"使用传统API方式获取项目 {repo.full_name} 的2025年以来的贡献者")
-            
-            # 使用生成器获取贡献者，避免一次性加载所有贡献者
-            contributors_processed = 0
-            for contributor in self.github_api.get_project_contributors(repo, max_count=1000, since_date=since_date):
-                # 保存贡献者信息
-                contributor_id = self._save_contributor(contributor)
-                
-                if contributor_id:
-                    # 保存项目-贡献者关联
-                    self._save_project_contributor(project_id, contributor_id, contributor.contributions)
-                    
-                contributors_processed += 1
-                
-                # 每处理100个贡献者检查一次
-                if contributors_processed % 100 == 0:
-                    logger.debug(f"已处理项目 {repo.full_name} 的 {contributors_processed} 个贡献者")
-            
-            return contributors_processed
-            
-        except Exception as e:
-            # 专门处理大型仓库的API限制错误
-            error_message = str(e)
-            if "contributor list is too large" in error_message or "403" in error_message:
-                logger.warning(f"GitHub API限制：无法获取项目 {repo.full_name} 的贡献者列表，这是因为仓库历史或贡献者列表过大")
-            else:
-                logger.error(f"使用API方式获取项目 {repo.full_name} 贡献者信息时出错: {e}")
-            return 0
     
     def _save_commit(self, project_id, contributor_id, sha, message, created_at, author_name, author_email):
         """保存提交记录信息"""

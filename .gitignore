@@ -149,3 +149,4 @@ logs/
 # Output directory
 output/
 1.sql
+temp.txt
