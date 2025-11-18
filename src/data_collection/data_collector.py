@@ -52,7 +52,7 @@ class DataCollector:
             logger.info(f"当前projects表中已有 {current_count} 条记录")
             
             # 如果当前记录数小于最大限制，则拉取新项目
-            if current_count < config.MAX_PROJECTS:
+            if current_count < 1001:
                 # 第一步：先拉取所有符合条件的仓库并存入projects表
                 self._fetch_all_projects()
             else:
