@@ -1,11 +1,18 @@
 -- 初始化数据库表结构
 
 -- 项目基本信息表
+-- 首先尝试修改owner字段为owner_id（如果表已存在）
+ALTER TABLE IF EXISTS projects DROP COLUMN IF EXISTS owner;
+ALTER table projects ADD COLUMN owner_id BIGINT;
+ALTER TABLE projects add CONSTRAINT fk_owner FOREIGN KEY (owner_id) REFERENCES contributors(github_id) ON DELETE SET NULL;
+-- 然后创建表（如果不存在）
 CREATE TABLE IF NOT EXISTS projects (
     id INT AUTO_INCREMENT PRIMARY KEY,
     github_id BIGINT UNIQUE,
     name VARCHAR(255) NOT NULL,
     full_name VARCHAR(255) NOT NULL UNIQUE,
+    owner_id BIGINT,
+    FOREIGN KEY (owner_id) REFERENCES contributors(github_id) ON DELETE SET NULL,
     description TEXT,
     created_at DATETIME,
     updated_at DATETIME,

@@ -72,7 +72,7 @@ class DataCollector:
         logger.info("开始拉取所有符合条件的GitHub仓库")
         
         # 构建搜索查询
-        query = f"pushed:>{config.START_DATE}"
+        query = f"pushed:>{config.START_DATE} stars:>={config.MIN_STARS} forks:>={config.MIN_FORKS}"
         
         try:
             # 搜索项目并只保存基本信息
@@ -81,7 +81,6 @@ class DataCollector:
                 try:
                     self._save_project(repo)
                     projects_saved += 1
-                    logger.info(f"已保存仓库基本信息: {repo.full_name} (共{projects_saved}个)")
                     
                     # 检查是否达到最大项目数
                     if projects_saved >= config.MAX_PROJECTS:
@@ -193,7 +192,6 @@ class DataCollector:
     def _save_project(self, repo):
         """保存项目基本信息"""
         try:
-            logger.info(f"开始处理项目基本信息: {repo.full_name}")
             # 检查项目是否已存在
             query = "SELECT id, status FROM projects WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (repo.id,))
@@ -209,15 +207,31 @@ class DataCollector:
                     logger.info(f"已重置项目 {repo.full_name} 的状态为pending")
                 return project_id
             
+            # 保存项目所有者到contributors表
+            owner_id = None
+            if repo.owner:
+                # 创建临时贡献者对象用于保存项目所有者信息
+                class TempOwnerContributor:
+                    def __init__(self, owner):
+                        self.id = owner.id
+                        self.login = owner.login
+                        self.avatar_url = owner.avatar_url if hasattr(owner, 'avatar_url') else None
+                        self.html_url = owner.html_url if hasattr(owner, 'html_url') else None
+                        self.contributions = 0  # 项目所有者不直接计入贡献数
+                
+                temp_owner = TempOwnerContributor(repo.owner)
+                owner_id = self._save_contributor(temp_owner)
+                logger.debug(f"已保存项目 {repo.full_name} 的所有者 {repo.owner.login}，ID: {owner_id}")
+            
             # 插入新项目
             query = """
             INSERT INTO projects (
-                github_id, name, full_name, description, created_at, 
+                github_id, name, full_name, owner_id, description, created_at, 
                 updated_at, pushed_at, stargazers_count, forks_count, 
                 open_issues_count, license_name, homepage, default_branch,
                 contributors_count, main_language, topics, created_at_timestamp,
                 updated_at_timestamp, status
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             # 初始设置贡献者数量为0，将在_save_contributors方法中更新为2025年以来的贡献者数量
@@ -227,6 +241,7 @@ class DataCollector:
                 repo.id,
                 repo.name,
                 repo.full_name,
+                owner_id,
                 repo.description,
                 repo.created_at,
                 repo.updated_at,
@@ -247,7 +262,6 @@ class DataCollector:
             
             self.db_manager.execute_query(query, params)
             project_id = self.db_manager.get_last_insert_id()
-            logger.info(f"项目基本信息处理完成: {repo.full_name}，ID: {project_id}")
             
             return project_id
             

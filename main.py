@@ -54,7 +54,7 @@ def analyze_data():
     
     try:
         # 执行数据分析
-        analysis_results = data_analyzer.analyze()
+        analysis_results = data_analyzer.generate_analysis_summary()
         error_logger.info("数据分析完成")
         
         # 统计分析结果
