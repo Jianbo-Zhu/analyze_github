@@ -146,12 +146,6 @@ class DataCollector:
                     except Exception as e:
                         logger.warning(f"保存项目 {project_name} 贡献者信息时出错，继续处理其他数据: {e}")
                     
-                    # 保存PR记录（仅2025年以来的），但允许失败继续
-                    try:
-                        self._save_pull_requests(repo)
-                    except Exception as e:
-                        logger.warning(f"保存项目 {project_name} PR记录时出错，继续处理其他数据: {e}")
-                    
                     # 更新项目状态为完成
                     self._update_project_status(project_id, 'completed')
                     logger.info(f"项目 {project_name} 数据采集完成")
@@ -723,7 +717,6 @@ class DataCollector:
     def _save_commit(self, project_id, contributor_id, sha, message, created_at, author_name, author_email):
         """保存提交记录信息"""
         try:
-            logger.info(f"开始处理提交记录: {sha[:7]}")
             # 检查提交是否已存在
             query = "SELECT id FROM commits WHERE project_id = %s AND sha = %s"
             result = self.db_manager.execute_query(query, (project_id, sha))
@@ -740,7 +733,6 @@ class DataCollector:
             
             params = (project_id, contributor_id, sha, message, created_at, author_name, author_email)
             self.db_manager.execute_query(query, params)
-            logger.info(f"提交记录处理完成: {sha[:7]}")
             
         except Exception as e:
             logger.error(f"保存提交记录 {sha} 时出错: {e}")
@@ -767,8 +759,6 @@ class DataCollector:
             Exception: 当数据库操作失败时抛出异常，但会被方法内部捕获并记录
         """
         try:
-            # 记录方法开始执行的日志
-            logger.info(f"开始处理贡献者信息: {contributor.login}")
             
             # 检查贡献者是否已存在于数据库中
             # 使用GitHub用户ID作为唯一标识进行查询
@@ -811,9 +801,6 @@ class DataCollector:
             
             # 由于github_id现在是主键，直接使用contributor.id作为返回值
             contributor_id = contributor.id
-            
-            # 记录方法执行完成的日志
-            logger.info(f"贡献者信息处理完成: {contributor.login}，ID: {contributor_id}")
             
             # 返回新贡献者的ID
             return contributor_id
