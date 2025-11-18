@@ -45,8 +45,18 @@ class DataCollector:
         logger.info(f"筛选条件: 星标数>={config.MIN_STARS}, Fork数>={config.MIN_FORKS}")
         
         try:
-            # 第一步：先拉取所有符合条件的仓库并存入projects表
-            self._fetch_all_projects()
+            # 检查projects表中当前记录数量
+            query = "SELECT COUNT(*) as count FROM projects"
+            result = self.db_manager.execute_query(query)
+            current_count = result[0]['count'] if result else 0
+            logger.info(f"当前projects表中已有 {current_count} 条记录")
+            
+            # 如果当前记录数小于最大限制，则拉取新项目
+            if current_count < config.MAX_PROJECTS:
+                # 第一步：先拉取所有符合条件的仓库并存入projects表
+                self._fetch_all_projects()
+            else:
+                logger.info(f"projects表中已有 {current_count} 条记录，已达到最大限制 {config.MAX_PROJECTS}，跳过新项目拉取")
             
             # 第二步：处理状态为pending或failed的项目
             self._process_pending_projects()
@@ -476,7 +486,7 @@ class DataCollector:
     def _save_pull_requests(self, repo):
         """保存项目的PR记录（仅保存2025年以来的）"""
         try:
-            logger.info(f"开始保存项目 {repo.full_name} 的PR记录（仅2025年以来）")
+            logger.info(f"开始保存项目 {repo.full_name} 的PR记录（仅2025年来）")
             
             # 获取项目ID
             query = "SELECT id FROM projects WHERE github_id = %s"
