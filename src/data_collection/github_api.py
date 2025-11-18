@@ -7,6 +7,7 @@ from src.utils.logger import data_collection_logger
 
 logger = data_collection_logger
 
+
 class GitHubAPI:
     """GitHub API交互类"""
     
@@ -16,6 +17,11 @@ class GitHubAPI:
         self.DEFAULT_MAX_COUNT = 2000  # 默认最大记录数
         self.CHECK_INTERVAL = 50  # API检查间隔
         self.BUFFER_REMAINING = 10  # API剩余请求缓冲
+        # 添加缓存字典来存储已获取的仓库对象和用户详情
+        self.repo_cache = {}
+        self.user_cache = {}
+        # 添加缓存TTL，单位秒
+        self.cache_ttl = 3600  # 缓存1小时
     
     def authenticate(self):
         """认证GitHub API"""
@@ -89,6 +95,8 @@ class GitHubAPI:
                 if self._is_valid_project(repo):
                     count += 1
                     logger.info(f"找到符合条件的项目 #{count}: {repo.full_name}")
+                    # 缓存仓库对象
+                    self._cache_repo(repo)
                     yield repo
                 
                 # 达到最大项目数时停止
@@ -149,7 +157,8 @@ class GitHubAPI:
             
             # 获取贡献者生成器时添加错误处理
             try:
-                # 如果指定了起始日期，我们需要通过其他方式筛选
+                # 注意：移除了为每个贡献者单独检查提交的逻辑，以减少API调用
+                # 贡献者的筛选逻辑将移至data_collector中处理
                 contributors_generator = repo.get_contributors()
             except GithubException as e:
                 # 专门处理大型仓库的贡献者列表限制错误
@@ -180,23 +189,8 @@ class GitHubAPI:
             filtered_count = 0
             try:
                 for contributor in contributors_generator:
-                    # 如果指定了起始日期，我们需要检查贡献者是否在该日期后有提交
-                    if since_date:
-                        # 获取该贡献者在指定日期后的提交
-                        has_recent_contributions = False
-                        try:
-                            # 检查该贡献者是否在2025年以后有提交
-                            recent_commits = list(repo.get_commits(author=contributor, since=since_date))
-                            has_recent_contributions = len(recent_commits) > 0
-                        except Exception as e:
-                            logger.warning(f"检查贡献者 {contributor.login} 的近期提交时出错: {e}")
-                            # 如果出错，保守起见跳过该贡献者
-                            continue
-                        
-                        # 如果没有近期贡献，跳过
-                        if not has_recent_contributions:
-                            continue
-                        filtered_count += 1
+                    # 不再为每个贡献者检查提交历史，避免额外的API调用
+                    # 筛选工作将在data_collector中基于已有的提交数据完成
                     
                     yield contributor
                     count += 1
@@ -217,7 +211,7 @@ class GitHubAPI:
                 else:
                     logger.error(f"迭代项目 {repo.full_name} 贡献者时出错: {e}")
                     
-            logger.debug(f"获取项目 {repo.full_name} 贡献者完成，共处理 {count} 个贡献者，过滤掉 {filtered_count} 个无近期贡献的贡献者")
+            logger.debug(f"获取项目 {repo.full_name} 贡献者完成，共处理 {count} 个贡献者")
                     
         except Exception as e:
             logger.error(f"获取项目 {repo.full_name} 贡献者信息时发生未预期错误: {e}")
@@ -232,10 +226,18 @@ class GitHubAPI:
         Returns:
             dict: 贡献者详细信息
         """
+        # 检查缓存
+        if username in self.user_cache:
+            cached_data, timestamp = self.user_cache[username]
+            # 检查缓存是否过期
+            if time.time() - timestamp < self.cache_ttl:
+                logger.debug(f"从缓存中获取用户 {username} 的详细信息")
+                return cached_data
+        
         try:
             self.check_rate_limit()
             user = self.github.get_user(username)
-            return {
+            user_data = {
                 'id': user.id,
                 'username': user.login,
                 'name': user.name,
@@ -246,8 +248,14 @@ class GitHubAPI:
                 'html_url': user.html_url,
                 'created_at': user.created_at
             }
+            
+            # 更新缓存
+            self.user_cache[username] = (user_data, time.time())
+            return user_data
         except Exception as e:
             logger.error(f"获取贡献者 {username} 详细信息时出错: {e}")
+            # 出错时也缓存None，避免短时间内重复请求同一失败的用户
+            self.user_cache[username] = (None, time.time())
             return None
     
     def get_repo(self, repo_id):
@@ -259,10 +267,21 @@ class GitHubAPI:
         Returns:
             Repository: GitHub仓库对象
         """
+        # 检查缓存
+        if repo_id in self.repo_cache:
+            cached_repo, timestamp = self.repo_cache[repo_id]
+            # 检查缓存是否过期
+            if time.time() - timestamp < self.cache_ttl:
+                logger.debug(f"从缓存中获取仓库ID {repo_id} 的对象")
+                return cached_repo
+        
         try:
             self.check_rate_limit()
             repo = self.github.get_repo(repo_id)
             logger.info(f"成功获取仓库ID {repo_id} 的对象: {repo.full_name}")
+            
+            # 更新缓存
+            self._cache_repo(repo)
             return repo
         except Exception as e:
             logger.error(f"获取仓库ID {repo_id} 的对象时出错: {e}")
@@ -277,10 +296,21 @@ class GitHubAPI:
         Returns:
             Repository: GitHub仓库对象
         """
+        # 检查缓存 - 首先查找是否有相同full_name的缓存
+        for repo_id, (repo, timestamp) in self.repo_cache.items():
+            if hasattr(repo, 'full_name') and repo.full_name == full_name:
+                if time.time() - timestamp < self.cache_ttl:
+                    logger.debug(f"从缓存中获取仓库 {full_name} 的对象")
+                    return repo
+                break
+        
         try:
             self.check_rate_limit()
             repo = self.github.get_repo(full_name)
             logger.info(f"成功获取仓库 {full_name} 的对象")
+            
+            # 更新缓存
+            self._cache_repo(repo)
             return repo
         except Exception as e:
             logger.error(f"获取仓库 {full_name} 的对象时出错: {e}")
@@ -396,6 +426,16 @@ class GitHubAPI:
         except Exception as e:
             logger.error(f"获取项目 {repo.full_name} PR记录时出错: {e}")
             return
+    
+    def _cache_repo(self, repo):
+        """缓存仓库对象
+        
+        Args:
+            repo: GitHub仓库对象
+        """
+        if hasattr(repo, 'id'):
+            self.repo_cache[repo.id] = (repo, time.time())
+
 
 # 创建全局GitHub API实例
 github_api = GitHubAPI()
