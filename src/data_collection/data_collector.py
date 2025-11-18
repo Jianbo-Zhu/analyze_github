@@ -40,59 +40,179 @@ class DataCollector:
         logger.info("数据采集初始化完成")
     
     def collect_projects(self):
-        """采集符合条件的GitHub项目"""
+        """采集符合条件的GitHub项目，支持断点续传功能"""
         logger.info(f"开始采集GitHub项目，最大项目数: {config.MAX_PROJECTS}")
         logger.info(f"筛选条件: 星标数>={config.MIN_STARS}, Fork数>={config.MIN_FORKS}")
         
-        # 构建搜索查询
-        query = f"pushed:>{config.START_DATE}"
-        
         try:
-            # 搜索项目
-            for repo in self.github_api.search_projects(query):
-                # 保存项目信息
-                self._save_project(repo)
-                
-                # 保存项目语言信息
-                self._save_project_languages(repo)
-                
-                # 保存项目主题标签
-                self._save_project_topics(repo)
-                
-                # 保存项目统计信息
-                self._save_project_statistics(repo)
-                
-                # 保存贡献者信息，但允许失败继续
-                try:
-                    self._save_contributors(repo)
-                except Exception as e:
-                    logger.warning(f"保存项目 {repo.full_name} 贡献者信息时出错，继续处理其他数据: {e}")
-                
-                # 保存PR记录（仅2025年以来的），但允许失败继续
-                try:
-                    self._save_pull_requests(repo)
-                except Exception as e:
-                    logger.warning(f"保存项目 {repo.full_name} PR记录时出错，继续处理其他数据: {e}")
-                
-                logger.info(f"项目 {repo.full_name} 数据采集完成")
-                
+            # 检查projects表中当前记录数量
+            query = "SELECT COUNT(*) as count FROM projects"
+            result = self.db_manager.execute_query(query)
+            current_count = result[0]['count'] if result else 0
+            logger.info(f"当前projects表中已有 {current_count} 条记录")
+            
+            # 如果当前记录数小于最大限制，则拉取新项目
+            if current_count < config.MAX_PROJECTS:
+                # 第一步：先拉取所有符合条件的仓库并存入projects表
+                self._fetch_all_projects()
+            else:
+                logger.info(f"projects表中已有 {current_count} 条记录，已达到最大限制 {config.MAX_PROJECTS}，跳过新项目拉取")
+            
+            # 第二步：处理状态为pending或failed的项目
+            self._process_pending_projects()
+            
         except Exception as e:
             logger.error(f"采集项目时发生错误: {e}")
             raise
         finally:
             self.db_manager.disconnect()
     
+    def _fetch_all_projects(self):
+        """拉取所有符合条件的仓库并存入projects表，不进行详细数据采集"""
+        logger.info("开始拉取所有符合条件的GitHub仓库")
+        
+        # 构建搜索查询
+        query = f"pushed:>{config.START_DATE}"
+        
+        try:
+            # 搜索项目并只保存基本信息
+            projects_saved = 0
+            for repo in self.github_api.search_projects(query):
+                try:
+                    self._save_project(repo)
+                    projects_saved += 1
+                    logger.info(f"已保存仓库基本信息: {repo.full_name} (共{projects_saved}个)")
+                    
+                    # 检查是否达到最大项目数
+                    if projects_saved >= config.MAX_PROJECTS:
+                        logger.info(f"已达到最大项目数限制: {config.MAX_PROJECTS}")
+                        break
+                except Exception as e:
+                    logger.warning(f"保存仓库 {repo.full_name} 基本信息时出错，继续处理下一个仓库: {e}")
+                    continue
+            
+            logger.info(f"仓库基本信息拉取完成，共保存 {projects_saved} 个仓库")
+            
+        except Exception as e:
+            logger.error(f"拉取仓库基本信息时发生错误: {e}")
+            raise
+    
+    def _process_pending_projects(self):
+        """处理状态为pending或failed的项目，进行详细数据采集"""
+        logger.info("开始处理待采集的项目")
+        
+        try:
+            # 查询状态为pending或failed的项目
+            query = """
+            SELECT github_id, name, full_name 
+            FROM projects 
+            WHERE status IN ('pending', 'failed') 
+            ORDER BY status ASC, id ASC
+            """
+            pending_projects = self.db_manager.execute_query(query)
+            
+            if not pending_projects:
+                logger.info("没有待处理的项目")
+                return
+            
+            logger.info(f"找到 {len(pending_projects)} 个待处理的项目")
+            
+            # 处理每个待处理的项目
+            for project in pending_projects:
+                project_id = project['github_id']
+                project_name = project['full_name']
+                logger.info(f"开始处理项目: {project_name}")
+                
+                try:
+                    # 获取GitHub仓库对象
+                    repo = self.github_api.get_repo(project_id)
+                    
+                    # 更新项目状态为采集ing
+                    self._update_project_status(project_id, 'collecting')
+                    
+                    # 采集详细数据
+                    # 保存项目语言信息
+                    self._save_project_languages(repo)
+                    
+                    # 保存项目主题标签
+                    self._save_project_topics(repo)
+                    
+                    # 保存项目统计信息
+                    self._save_project_statistics(repo)
+                    
+                    # 保存贡献者信息，但允许失败继续
+                    try:
+                        self._save_contributors(repo)
+                    except Exception as e:
+                        logger.warning(f"保存项目 {project_name} 贡献者信息时出错，继续处理其他数据: {e}")
+                    
+                    # 保存PR记录（仅2025年以来的），但允许失败继续
+                    try:
+                        self._save_pull_requests(repo)
+                    except Exception as e:
+                        logger.warning(f"保存项目 {project_name} PR记录时出错，继续处理其他数据: {e}")
+                    
+                    # 更新项目状态为完成
+                    self._update_project_status(project_id, 'completed')
+                    logger.info(f"项目 {project_name} 数据采集完成")
+                    
+                except Exception as e:
+                    error_msg = str(e)
+                    logger.error(f"处理项目 {project_name} 时出错: {error_msg}")
+                    # 更新项目状态为失败并记录错误信息
+                    self._update_project_status(project_id, 'failed', error_msg)
+                    # 继续处理下一个项目
+                    continue
+            
+            logger.info("所有待处理项目已处理完成")
+            
+        except Exception as e:
+            logger.error(f"处理待采集项目时发生错误: {e}")
+            raise
+    
+    def _update_project_status(self, github_id, status, error_msg=None):
+        """更新项目的采集状态"""
+        try:
+            if status == 'failed' and error_msg:
+                query = "UPDATE projects SET status = %s, last_error = %s WHERE github_id = %s"
+                self.db_manager.execute_query(query, (status, error_msg, github_id))
+            else:
+                query = "UPDATE projects SET status = %s, last_error = NULL WHERE github_id = %s"
+                self.db_manager.execute_query(query, (status, github_id))
+            logger.debug(f"已更新项目ID {github_id} 的状态为: {status}")
+        except Exception as e:
+            logger.error(f"更新项目 {github_id} 状态时出错: {e}")
+    
+    def get_repo(self, github_id):
+        """根据GitHub ID获取仓库对象"""
+        try:
+            query = "SELECT full_name FROM projects WHERE github_id = %s"
+            result = self.db_manager.execute_query(query, (github_id,))
+            if result:
+                full_name = result[0]['full_name']
+                return self.github_api.get_repo_by_name(full_name)
+            return None
+        except Exception as e:
+            logger.error(f"获取仓库对象时出错: {e}")
+            raise
+    
     def _save_project(self, repo):
         """保存项目基本信息"""
         try:
             logger.info(f"开始处理项目基本信息: {repo.full_name}")
             # 检查项目是否已存在
-            query = "SELECT id FROM projects WHERE github_id = %s"
+            query = "SELECT id, status FROM projects WHERE github_id = %s"
             result = self.db_manager.execute_query(query, (repo.id,))
             
             if result:
                 project_id = result[0]['id']
-                logger.debug(f"项目 {repo.full_name} 已存在，ID: {project_id}")
+                status = result[0]['status']
+                logger.debug(f"项目 {repo.full_name} 已存在，ID: {project_id}，状态: {status}")
+                # 如果项目状态是failed，重置为pending以便重新处理
+                if status == 'failed':
+                    query = "UPDATE projects SET status = 'pending', last_error = NULL WHERE id = %s"
+                    self.db_manager.execute_query(query, (project_id,))
+                    logger.info(f"已重置项目 {repo.full_name} 的状态为pending")
                 return project_id
             
             # 插入新项目
@@ -102,8 +222,8 @@ class DataCollector:
                 updated_at, pushed_at, stargazers_count, forks_count, 
                 open_issues_count, license_name, homepage, default_branch,
                 contributors_count, main_language, topics, created_at_timestamp,
-                updated_at_timestamp
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                updated_at_timestamp, status
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
             
             # 初始设置贡献者数量为0，将在_save_contributors方法中更新为2025年以来的贡献者数量
@@ -127,7 +247,8 @@ class DataCollector:
                 repo.language,
                 ','.join(self.github_api.get_project_topics(repo)),
                 int(repo.created_at.timestamp()) if repo.created_at else None,
-                int(repo.updated_at.timestamp()) if repo.updated_at else None
+                int(repo.updated_at.timestamp()) if repo.updated_at else None,
+                'pending'  # 初始状态为待采集
             )
             
             self.db_manager.execute_query(query, params)
@@ -365,7 +486,7 @@ class DataCollector:
     def _save_pull_requests(self, repo):
         """保存项目的PR记录（仅保存2025年以来的）"""
         try:
-            logger.info(f"开始保存项目 {repo.full_name} 的PR记录（仅2025年以来）")
+            logger.info(f"开始保存项目 {repo.full_name} 的PR记录（仅2025年来）")
             
             # 获取项目ID
             query = "SELECT id FROM projects WHERE github_id = %s"
