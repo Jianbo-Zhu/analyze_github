@@ -43,6 +43,14 @@ class GitHubAPI:
     
     def check_rate_limit(self):
         """检查并处理API速率限制"""
+        # 确保github对象已初始化
+        if not self.github:
+            logger.warning("GitHub对象未初始化，尝试进行认证")
+            auth_success = self.authenticate()
+            if not auth_success:
+                logger.error("认证失败，无法检查API速率限制")
+                return
+        
         try:
             remaining, limit = self.github.rate_limiting
             reset_time = self.github.rate_limiting_resettime
